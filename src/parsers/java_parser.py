@@ -193,8 +193,8 @@ class JavaParser(LoggerMixin):
         # Remove comments and strings to avoid false matches
         cleaned_content = self._remove_comments_and_strings(content)
         
-        # Find class declaration
-        class_pattern = r'(?:@\w+(?:\([^)]*\))?\s*)*(?:(public|private|protected)\s+)?(?:(abstract|final)\s+)?(class|interface)\s+(\w+)(?:\s+extends\s+(\w+))?(?:\s+implements\s+([^{]+))?'
+        # Find class declaration - exclude annotations from the match
+        class_pattern = r'(?:(public|private|protected)\s+)?(?:(abstract|final)\s+)?(class|interface)\s+(\w+)(?:\s+extends\s+(\w+))?(?:\s+implements\s+([^{]+))?'
         
         match = re.search(class_pattern, cleaned_content, re.MULTILINE)
         if not match:
@@ -220,40 +220,192 @@ class JavaParser(LoggerMixin):
         }
     
     def _extract_methods(self, content: str) -> List[JavaMethod]:
-        """Extract method declarations."""
+        """Extract method declarations with improved REST annotation support."""
         methods = []
         
-        # This is a simplified method extraction - a full parser would be more robust
-        method_pattern = r'(?:@\w+(?:\([^)]*\))?\s*)*(?:(public|private|protected)\s+)?(?:(static|final|abstract)\s+)?(\w+(?:<[^>]*>)?)\s+(\w+)\s*\(([^)]*)\)\s*(?:throws\s+[^{]+)?\s*\{'
+        # Remove comments to avoid false matches
+        cleaned_content = self._remove_comments_and_strings(content)
         
-        for match in re.finditer(method_pattern, content, re.MULTILINE):
-            visibility, modifier, return_type, name, params = match.groups()
+        # More robust method pattern that handles annotations better
+        # Look for method signatures that may span multiple lines
+        lines = cleaned_content.split('\n')
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
             
-            # Extract annotations before method
-            annotations = self._extract_annotations_before_position(content, match.start())
+            # Skip empty lines and non-method lines
+            if not line or line.startswith('//') or line.startswith('/*'):
+                i += 1
+                continue
             
-            # Parse parameters
-            parameters = self._parse_parameters(params or "")
-            
-            # Extract method body (simplified)
-            method_start = match.end()
-            method_body = self._extract_method_body(content, method_start)
-            
-            # Get line number
-            line_number = content[:match.start()].count('\n') + 1
-            
-            methods.append(JavaMethod(
-                name=name,
-                return_type=return_type or "void",
-                parameters=parameters,
-                annotations=annotations,
-                visibility=visibility or "package",
-                is_static=modifier == "static",
-                body=method_body,
-                line_number=line_number
-            ))
+            # Check if this could be the start of a method (annotation or method signature)
+            if line.startswith('@') or self._looks_like_method_signature(line):
+                method_info = self._extract_method_at_position(lines, i)
+                if method_info:
+                    methods.append(method_info['method'])
+                    i = method_info['next_line']
+                else:
+                    i += 1
+            else:
+                i += 1
         
         return methods
+    
+    def _looks_like_method_signature(self, line: str) -> bool:
+        """Check if a line looks like a method signature."""
+        # Look for patterns like: public Object methodName(
+        method_pattern = r'(?:public|private|protected)?\s*(?:static|final|abstract)?\s*\w+(?:<[^>]*>)?\s+\w+\s*\('
+        return bool(re.search(method_pattern, line))
+    
+    def _extract_method_at_position(self, lines: List[str], start_line: int) -> Optional[Dict[str, Any]]:
+        """Extract a method starting at the given line position."""
+        annotations = []
+        method_line = start_line
+        
+        # Collect annotations
+        i = start_line
+        while i < len(lines):
+            line = lines[i].strip()
+            if line.startswith('@'):
+                annotations.append(line)
+                i += 1
+            elif line and not line.startswith('//'):
+                method_line = i
+                break
+            else:
+                i += 1
+        
+        if method_line >= len(lines):
+            return None
+        
+        # Find the complete method signature (may span multiple lines)
+        method_signature = ""
+        brace_count = 0
+        paren_count = 0
+        found_opening_brace = False
+        
+        j = method_line
+        while j < len(lines):
+            line = lines[j].strip()
+            method_signature += " " + line
+            
+            # Count parentheses to find end of parameter list
+            paren_count += line.count('(') - line.count(')')
+            
+            # Look for opening brace
+            if '{' in line:
+                found_opening_brace = True
+                break
+            
+            # If we have balanced parentheses and see a semicolon, it's an abstract method
+            if paren_count == 0 and ';' in line:
+                break
+            
+            j += 1
+        
+        if not found_opening_brace and ';' not in method_signature:
+            return None
+        
+        # Parse the method signature
+        method = self._parse_method_signature(method_signature.strip(), annotations, method_line + 1)
+        if method:
+            return {
+                'method': method,
+                'next_line': j + 1
+            }
+        
+        return None
+    
+    def _parse_method_signature(self, signature: str, annotations: List[str], line_number: int) -> Optional[JavaMethod]:
+        """Parse a complete method signature."""
+        # Remove throws clause if present
+        signature = re.sub(r'\s+throws\s+[^{;]+', '', signature)
+        
+        # Extract method components
+        # Pattern: [visibility] [modifiers] return_type method_name(parameters)
+        pattern = r'(?:(public|private|protected)\s+)?(?:(static|final|abstract)\s+)?(\w+(?:<[^>]*>)?)\s+(\w+)\s*\(([^)]*)\)'
+        
+        match = re.search(pattern, signature)
+        if not match:
+            return None
+        
+        visibility, modifier, return_type, name, params_str = match.groups()
+        
+        # Parse parameters with annotations
+        parameters = self._parse_parameters_with_annotations(params_str or "")
+        
+        # Extract method body (simplified - just mark as present)
+        body = "{ ... }" if '{' in signature else ""
+        
+        return JavaMethod(
+            name=name,
+            return_type=return_type or "void",
+            parameters=parameters,
+            annotations=annotations,
+            visibility=visibility or "package",
+            is_static=modifier == "static",
+            body=body,
+            line_number=line_number
+        )
+    
+    def _parse_parameters_with_annotations(self, params_str: str) -> List[Dict[str, str]]:
+        """Parse method parameters including JAX-RS annotations."""
+        if not params_str.strip():
+            return []
+        
+        parameters = []
+        
+        # Split parameters more carefully to handle annotations
+        param_parts = []
+        current_param = ""
+        paren_depth = 0
+        
+        for char in params_str:
+            if char == ',' and paren_depth == 0:
+                param_parts.append(current_param.strip())
+                current_param = ""
+            else:
+                if char == '(':
+                    paren_depth += 1
+                elif char == ')':
+                    paren_depth -= 1
+                current_param += char
+        
+        if current_param.strip():
+            param_parts.append(current_param.strip())
+        
+        for param in param_parts:
+            param = param.strip()
+            if not param:
+                continue
+            
+            # Extract annotations from parameter
+            annotations = []
+            remaining_param = param
+            
+            # Find all annotations at the beginning
+            while remaining_param.strip().startswith('@'):
+                annotation_match = re.match(r'@\w+(?:\([^)]*\))?\s*', remaining_param)
+                if annotation_match:
+                    annotations.append(annotation_match.group().strip())
+                    remaining_param = remaining_param[annotation_match.end():].strip()
+                else:
+                    break
+            
+            # Extract type and name from remaining parameter
+            parts = remaining_param.split()
+            if len(parts) >= 2:
+                param_type = ' '.join(parts[:-1])
+                param_name = parts[-1]
+                
+                parameters.append({
+                    'type': param_type,
+                    'name': param_name,
+                    'annotations': annotations
+                })
+        
+        return parameters
     
     def _extract_fields(self, content: str) -> List[Dict[str, Any]]:
         """Extract field declarations."""
