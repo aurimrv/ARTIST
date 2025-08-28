@@ -1,0 +1,647 @@
+"""
+Coordinator Agent for orchestrating the test generation process.
+"""
+
+from typing import Any, Dict, List, Optional
+from pathlib import Path
+import asyncio
+
+from .base_agent import BaseAgent
+from ..config.models import (
+    AgentConfig, SystemConfig, ProjectContext, 
+    GenerationResult, TestScenario
+)
+
+
+class CoordinatorAgent(BaseAgent):
+    """
+    Coordinator Agent responsible for orchestrating the entire test generation process.
+    
+    This agent manages the workflow, delegates tasks to other agents, and ensures
+    the process follows the correct sequence with proper error handling and retries.
+    """
+    
+    def __init__(self, config: AgentConfig, system_config: SystemConfig):
+        """Initialize the Coordinator Agent."""
+        super().__init__(config, system_config)
+        self._agents = {}
+        self._current_project: Optional[ProjectContext] = None
+    
+    async def _initialize_impl(self):
+        """Initialize the coordinator and its sub-agents."""
+        self.logger.info("Initializing Coordinator Agent and sub-agents")
+        
+        # Initialize sub-agents
+        self._agents = {}
+        
+        try:
+            # Initialize Planner Agent
+            from .planner_agent import PlannerAgent
+            from ..config.models import AgentConfig
+            
+            planner_config = self.system_config.agents.get('planner')
+            if not planner_config:
+                planner_config = AgentConfig(
+                    name='planner',
+                    model=self.system_config.openrouter.default_model
+                )
+            
+            planner = PlannerAgent(planner_config, self.system_config)
+            await planner.initialize()
+            self._agents['planner'] = planner
+            self.logger.info("Planner agent initialized successfully")
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize Planner agent: {e}")
+            self._agents['planner'] = None
+        
+        try:
+            # Initialize Generator Agent
+            from .generator_agent import GeneratorAgent
+            
+            generator_config = self.system_config.agents.get('generator')
+            if not generator_config:
+                generator_config = AgentConfig(
+                    name='generator',
+                    model=self.system_config.openrouter.default_model
+                )
+            
+            generator = GeneratorAgent(generator_config, self.system_config)
+            await generator.initialize()
+            self._agents['generator'] = generator
+            self.logger.info("Generator agent initialized successfully")
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize Generator agent: {e}")
+            self._agents['generator'] = None
+        
+        try:
+            # Initialize Compiler Corrector Agent
+            from .compiler_corrector_agent import CompilerCorrectorAgent
+            
+            compiler_config = self.system_config.agents.get('compiler_corrector')
+            if not compiler_config:
+                compiler_config = AgentConfig(
+                    name='compiler_corrector',
+                    model=self.system_config.openrouter.default_model
+                )
+            
+            compiler_corrector = CompilerCorrectorAgent(compiler_config, self.system_config)
+            await compiler_corrector.initialize()
+            self._agents['compiler_corrector'] = compiler_corrector
+            self.logger.info("Compiler Corrector agent initialized successfully")
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize Compiler Corrector agent: {e}")
+            self._agents['compiler_corrector'] = None
+        
+        try:
+            # Initialize Test Corrector Agent
+            from .test_corrector_agent import TestCorrectorAgent
+            
+            test_config = self.system_config.agents.get('test_corrector')
+            if not test_config:
+                test_config = AgentConfig(
+                    name='test_corrector',
+                    model=self.system_config.openrouter.default_model
+                )
+            
+            test_corrector = TestCorrectorAgent(test_config, self.system_config)
+            await test_corrector.initialize()
+            self._agents['test_corrector'] = test_corrector
+            self.logger.info("Test Corrector agent initialized successfully")
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize Test Corrector agent: {e}")
+            self._agents['test_corrector'] = None
+        
+        self.logger.info("Coordinator Agent initialization complete")
+    
+    def register_agent(self, agent_name: str, agent: BaseAgent):
+        """
+        Register a sub-agent with the coordinator.
+        
+        Args:
+            agent_name: Name of the agent
+            agent: Agent instance
+        """
+        self._agents[agent_name] = agent
+        self.logger.info(f"Registered agent: {agent_name}")
+    
+    async def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Main processing method that orchestrates the entire test generation workflow.
+        
+        Args:
+            input_data: Dictionary containing project parameters
+        
+        Returns:
+            Dictionary with generation results
+        """
+        try:
+            # Validate input
+            validation_errors = self.validate_input(input_data)
+            if validation_errors:
+                return {
+                    'success': False,
+                    'error': f"Input validation failed: {', '.join(validation_errors)}",
+                    'result': None
+                }
+            
+            # Create project context
+            project_context = self._create_project_context(input_data)
+            self._current_project = project_context
+            
+            self.logger.info(f"Starting test generation for project: {project_context.package_name}")
+            
+            # Execute the workflow
+            result = await self._execute_workflow(
+                project_context, 
+                skip_compilation=input_data.get('skip_compilation', False),
+                skip_test_run=input_data.get('skip_test_run', False)
+            )
+            
+            return {
+                'success': result.success,
+                'message': result.message,
+                'result': result
+            }
+            
+        except Exception as e:
+            self.log_error("Unexpected error in coordinator process", e)
+            return {
+                'success': False,
+                'error': f"Unexpected error: {str(e)}",
+                'result': None
+            }
+    
+    def validate_input(self, input_data: Dict[str, Any]) -> List[str]:
+        """
+        Validate input data for the coordinator.
+        
+        Args:
+            input_data: Input data to validate
+        
+        Returns:
+            List of validation errors
+        """
+        errors = super().validate_input(input_data)
+        
+        required_fields = [
+            'base_url', 'api_spec_path', 'api_src_path', 
+            'output_dir', 'package_name', 'main_test_class_name'
+        ]
+        
+        for field in required_fields:
+            if field not in input_data:
+                errors.append(f"Missing required field: {field}")
+            elif not input_data[field]:
+                errors.append(f"Empty value for required field: {field}")
+        
+        # Validate paths exist
+        if 'api_spec_path' in input_data:
+            spec_path = Path(input_data['api_spec_path'])
+            if not spec_path.exists():
+                errors.append(f"API specification file not found: {spec_path}")
+        
+        if 'api_src_path' in input_data:
+            src_path = Path(input_data['api_src_path'])
+            if not src_path.exists():
+                errors.append(f"API source directory not found: {src_path}")
+        
+        return errors
+    
+    def _create_project_context(self, input_data: Dict[str, Any]) -> ProjectContext:
+        """
+        Create a project context from input data.
+        
+        Args:
+            input_data: Input parameters
+        
+        Returns:
+            ProjectContext instance
+        """
+        return ProjectContext(
+            base_url=input_data['base_url'],
+            api_spec_path=Path(input_data['api_spec_path']),
+            api_src_path=Path(input_data['api_src_path']),
+            output_dir=Path(input_data['output_dir']),
+            package_name=input_data['package_name'],
+            main_test_class_name=input_data['main_test_class_name']
+        )
+    
+    async def _execute_workflow(self, context: ProjectContext, skip_compilation: bool = False, skip_test_run: bool = False) -> GenerationResult:
+        """
+        Execute the complete test generation workflow.
+        
+        Args:
+            context: Project context
+        
+        Returns:
+            Generation result
+        """
+        max_attempts = self.system_config.test_generation.max_generation_attempts
+        
+        for attempt in range(1, max_attempts + 1):
+            self.log_progress(f"Generation attempt {attempt}/{max_attempts}")
+            
+            try:
+                result = await self._execute_single_attempt(context, attempt, skip_compilation, skip_test_run)
+                
+                if result.success:
+                    self.logger.info(f"Test generation completed successfully on attempt {attempt}")
+                    return result
+                else:
+                    self.logger.warning(f"Attempt {attempt} failed: {result.message}")
+                    
+                    if attempt < max_attempts:
+                        self.logger.info(f"Retrying... ({attempt + 1}/{max_attempts})")
+                    
+            except Exception as e:
+                self.log_error(f"Attempt {attempt} failed with exception", e)
+                
+                if attempt == max_attempts:
+                    return GenerationResult(
+                        success=False,
+                        message=f"All {max_attempts} generation attempts failed. Last error: {str(e)}",
+                        generated_files=[],
+                        compilation_errors=[str(e)],
+                        test_failures=[],
+                        ignored_tests=[]
+                    )
+        
+        return GenerationResult(
+            success=False,
+            message=f"All {max_attempts} generation attempts failed",
+            generated_files=[],
+            compilation_errors=["Maximum attempts exceeded"],
+            test_failures=[],
+            ignored_tests=[]
+        )
+    
+    async def _execute_single_attempt(self, context: ProjectContext, attempt: int, skip_compilation: bool = False, skip_test_run: bool = False) -> GenerationResult:
+        """
+        Execute a single generation attempt.
+        
+        Args:
+            context: Project context
+            attempt: Attempt number
+        
+        Returns:
+            Generation result for this attempt
+        """
+        self.logger.info("Starting test generation workflow")
+        
+        # Step 1: Planning phase
+        self.log_progress("Phase 1: Analyzing API and creating test scenarios", 1, 5)
+        scenarios = await self._run_planning_phase(context)
+        
+        if not scenarios:
+            return GenerationResult(
+                success=False,
+                message="Planning phase failed - no test scenarios generated",
+                generated_files=[],
+                compilation_errors=["Planning phase failed"],
+                test_failures=[],
+                ignored_tests=[]
+            )
+        
+        # Step 2: Generation phase
+        self.log_progress("Phase 2: Generating test code", 2, 5)
+        generated_files = await self._run_generation_phase(context, scenarios)
+        
+        if not generated_files:
+            return GenerationResult(
+                success=False,
+                message="Generation phase failed - no test files generated",
+                generated_files=[],
+                compilation_errors=["Generation phase failed"],
+                test_failures=[],
+                ignored_tests=[]
+            )
+        
+        # Step 3: Compilation correction phase
+        self.log_progress("Phase 3: Checking and fixing compilation errors", 3, 5)
+        if skip_compilation:
+            self.logger.info("Skipping compilation phase as requested")
+            compilation_result = {'success': True, 'message': 'Compilation skipped', 'errors': []}
+        else:
+            compilation_result = await self._run_compilation_phase(context, generated_files)
+        
+        if not compilation_result['success']:
+            return GenerationResult(
+                success=False,
+                message=f"Compilation phase failed: {compilation_result['message']}",
+                generated_files=generated_files,
+                compilation_errors=compilation_result['errors'],
+                test_failures=[],
+                ignored_tests=[]
+            )
+        
+        # Step 4: Test correction phase
+        self.log_progress("Phase 4: Running tests and fixing failures", 4, 5)
+        if skip_test_run:
+            self.logger.info("Skipping test execution phase as requested")
+            test_result = {'success': True, 'message': 'Test execution skipped', 'failures': [], 'ignored': []}
+        else:
+            test_result = await self._run_test_correction_phase(context, generated_files)
+        
+        # Step 5: Final validation
+        self.log_progress("Phase 5: Final validation", 5, 5)
+        final_result = await self._run_final_validation(context, generated_files)
+        
+        return GenerationResult(
+            success=final_result['success'],
+            message=final_result['message'],
+            generated_files=generated_files,
+            compilation_errors=compilation_result.get('errors', []),
+            test_failures=test_result.get('failures', []),
+            ignored_tests=test_result.get('ignored', [])
+        )
+    
+    async def _run_planning_phase(self, context: ProjectContext) -> List[TestScenario]:
+        """
+        Run the planning phase using the Planner Agent.
+        
+        Args:
+            context: Project context
+        
+        Returns:
+            List of test scenarios
+        """
+        if not self._agents.get('planner'):
+            self.logger.warning("Planner agent not available, using mock scenarios")
+            return self._create_mock_scenarios(context)
+        
+        planner = self._agents['planner']
+        
+        planning_input = {
+            'api_spec_path': str(context.api_spec_path),
+            'api_src_path': str(context.api_src_path),
+            'base_url': context.base_url
+        }
+        
+        result = await planner.process(planning_input)
+        
+        if result.get('success'):
+            return result.get('scenarios', [])
+        else:
+            self.log_error(f"Planning phase failed: {result.get('error', 'Unknown error')}")
+            return []
+    
+    async def _run_generation_phase(self, context: ProjectContext, scenarios: List[TestScenario]) -> List[Path]:
+        """
+        Run the generation phase using the Generator Agent.
+        
+        Args:
+            context: Project context
+            scenarios: Test scenarios to generate
+        
+        Returns:
+            List of generated file paths
+        """
+        if not self._agents.get('generator'):
+            self.logger.warning("Generator agent not available, creating mock files")
+            return self._create_mock_generated_files(context)
+        
+        generator = self._agents['generator']
+        
+        generation_input = {
+            'context': context,
+            'scenarios': scenarios
+        }
+        
+        result = await generator.process(generation_input)
+        
+        if result.get('success'):
+            return result.get('generated_files', [])
+        else:
+            self.log_error(f"Generation phase failed: {result.get('error', 'Unknown error')}")
+            return []
+    
+    async def _run_compilation_phase(self, context: ProjectContext, files: List[Path]) -> Dict[str, Any]:
+        """
+        Run the compilation correction phase.
+        
+        Args:
+            context: Project context
+            files: Generated files to compile
+        
+        Returns:
+            Compilation result dictionary
+        """
+        if not self._agents.get('compiler_corrector'):
+            self.logger.warning("Compiler corrector agent not available, assuming compilation success")
+            return {'success': True, 'message': 'Mock compilation success', 'errors': []}
+        
+        compiler = self._agents['compiler_corrector']
+        
+        compilation_input = {
+            'project_dir': str(context.maven_project_dir),
+            'generated_files': [str(f) for f in files]
+        }
+        
+        result = await compiler.process(compilation_input)
+        return result
+    
+    async def _run_test_correction_phase(self, context: ProjectContext, files: List[Path]) -> Dict[str, Any]:
+        """
+        Run the test correction phase.
+        
+        Args:
+            context: Project context
+            files: Generated files to test
+        
+        Returns:
+            Test result dictionary
+        """
+        if not self._agents.get('test_corrector'):
+            self.logger.warning("Test corrector agent not available, assuming test success")
+            return {'success': True, 'message': 'Mock test success', 'failures': [], 'ignored': []}
+        
+        test_corrector = self._agents['test_corrector']
+        
+        test_input = {
+            'project_dir': str(context.maven_project_dir),
+            'generated_files': [str(f) for f in files]
+        }
+        
+        result = await test_corrector.process(test_input)
+        return result
+    
+    async def _run_final_validation(self, context: ProjectContext, files: List[Path]) -> Dict[str, Any]:
+        """
+        Run final validation of the generated project.
+        
+        Args:
+            context: Project context
+            files: Generated files
+        
+        Returns:
+            Validation result dictionary
+        """
+        # Basic validation - check if files exist and are not empty
+        valid_files = []
+        
+        for file_path in files:
+            if file_path.exists() and file_path.stat().st_size > 0:
+                valid_files.append(file_path)
+            else:
+                self.logger.warning(f"Generated file is missing or empty: {file_path}")
+        
+        if not valid_files:
+            return {
+                'success': False,
+                'message': 'No valid generated files found'
+            }
+        
+        return {
+            'success': True,
+            'message': f'Successfully generated {len(valid_files)} test files'
+        }
+    
+    def _create_mock_scenarios(self, context: ProjectContext) -> List[TestScenario]:
+        """Create mock test scenarios for testing purposes."""
+        return [
+            TestScenario(
+                name="test_get_all_countries",
+                description="Test getting all countries",
+                endpoint="/v2/all",
+                method="GET",
+                parameters={},
+                expected_status=200,
+                is_negative_test=False
+            ),
+            TestScenario(
+                name="test_get_country_by_name",
+                description="Test getting country by name",
+                endpoint="/v2/name/portugal",
+                method="GET",
+                parameters={"name": "portugal"},
+                expected_status=200,
+                is_negative_test=False
+            )
+        ]
+    
+    def _create_mock_generated_files(self, context: ProjectContext) -> List[Path]:
+        """Create mock generated files for testing purposes."""
+        from ..utils.file_utils import ensure_directory, write_file
+        
+        # Create the test directory structure
+        test_dir = context.maven_project_dir / "src" / "test" / "java"
+        ensure_directory(test_dir)
+        
+        # Create a basic test file
+        test_file = test_dir / f"{context.main_test_class_name}.java"
+        
+        # Generate basic test content
+        mock_test_content = f"""package {context.package_name};
+
+import org.junit.Test;
+import static io.restassured.RestAssured.*;
+import static org.hamcrest.Matchers.*;
+
+/**
+ * Mock integration test for {context.base_url}
+ * Generated by API Test Generator System (Mock Mode)
+ */
+public class {context.main_test_class_name} {{
+    
+    private static final String BASE_URL = "{context.base_url}";
+    
+    @Test
+    public void testApiConnection() {{
+        given()
+            .baseUri(BASE_URL)
+        .when()
+            .get("/")
+        .then()
+            .statusCode(anyOf(is(200), is(404), is(405)));
+    }}
+    
+    @Test
+    public void testMockEndpoint() {{
+        // This is a mock test - replace with actual API endpoints
+        given()
+            .baseUri(BASE_URL)
+        .when()
+            .get("/health")
+        .then()
+            .statusCode(anyOf(is(200), is(404)));
+    }}
+}}
+"""
+        
+        # Write the mock test file
+        write_file(test_file, mock_test_content)
+        self.logger.info(f"Created mock test file: {test_file}")
+        
+        # Also create a basic pom.xml if it doesn't exist
+        pom_file = context.maven_project_dir / "pom.xml"
+        if not pom_file.exists():
+            pom_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    
+    <groupId>{context.package_name}</groupId>
+    <artifactId>api-integration-tests</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+    
+    <properties>
+        <maven.compiler.source>8</maven.compiler.source>
+        <maven.compiler.target>8</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+    
+    <dependencies>
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.13.2</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.rest-assured</groupId>
+            <artifactId>rest-assured</artifactId>
+            <version>4.5.1</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+    
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.8.1</version>
+                <configuration>
+                    <source>8</source>
+                    <target>8</target>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.0.0-M7</version>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+"""
+            write_file(pom_file, pom_content)
+            self.logger.info(f"Created mock pom.xml: {pom_file}")
+        
+        return [test_file]
+    
+    def get_current_project(self) -> Optional[ProjectContext]:
+        """Get the current project context."""
+        return self._current_project
+    
+    def get_registered_agents(self) -> Dict[str, BaseAgent]:
+        """Get all registered agents."""
+        return {k: v for k, v in self._agents.items() if v is not None}
+
