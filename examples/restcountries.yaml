@@ -83,7 +83,7 @@ paths:
         '404':
           description: Country not found
         '400':
-          description: Bad request
+          description: Bad Request
 
   /v2/currency/{currency}:
     get:

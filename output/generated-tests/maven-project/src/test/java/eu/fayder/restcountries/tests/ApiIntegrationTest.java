@@ -7,6 +7,7 @@ import org.junit.BeforeClass;
 import org.junit.AfterClass;
 import static org.junit.Assert.*;
 import static org.hamcrest.Matchers.*;
+
 import io.restassured.RestAssured;
 import io.restassured.response.Response;
 import io.restassured.specification.RequestSpecification;
@@ -38,7 +39,7 @@ public class ApiIntegrationTest {
     }
 
     @Test
-    public void testGetAllSuccess() {
+    public void testGetAllCountriesSuccess() {
         Response response = givenDefaultRequest()
         .when()
             .get("/v2/all")
@@ -55,21 +56,9 @@ public class ApiIntegrationTest {
     }
 
     @Test
-    public void testGetAllInvalidParams() {
+    public void testGetCountryByNameSuccess() {
         Response response = givenDefaultRequest()
-            .queryParam("invalid", "parameter")
-        .when()
-            .get("/v2/all")
-        .then()
-            .statusCode(400)
-            .time(lessThan((long) DEFAULT_TIMEOUT * 1000))
-            .extract().response();
-    }
-
-    @Test
-    public void testGetNameSuccess() {
-        Response response = givenDefaultRequest()
-            .pathParam("name", "sample_value")
+            .pathParam("name", "portugal")
         .when()
             .get("/v2/name/{name}")
         .then()
@@ -85,10 +74,9 @@ public class ApiIntegrationTest {
     }
 
     @Test
-    public void testGetNameInvalidParams() {
+    public void testGetCountryByNameBadRequest() {
         Response response = givenDefaultRequest()
-            .pathParam("name", "test")
-            .queryParam("invalid", "parameter")
+            .pathParam("name", "!@#$%^&*()")
         .when()
             .get("/v2/name/{name}")
         .then()
@@ -98,9 +86,9 @@ public class ApiIntegrationTest {
     }
 
     @Test
-    public void testGetNameNotFound() {
+    public void testGetCountryByNameNotFound() {
         Response response = givenDefaultRequest()
-            .pathParam("name", "NonExistentResource")
+            .pathParam("name", "NonExistentCountry")
         .when()
             .get("/v2/name/{name}")
         .then()
@@ -110,9 +98,9 @@ public class ApiIntegrationTest {
     }
 
     @Test
-    public void testGetAlphaSuccess() {
+    public void testGetCountryByAlphaCodeSuccess() {
         Response response = givenDefaultRequest()
-            .pathParam("code", "sample_value")
+            .pathParam("code", "pt")
         .when()
             .get("/v2/alpha/{code}")
         .then()
@@ -128,10 +116,9 @@ public class ApiIntegrationTest {
     }
 
     @Test
-    public void testGetAlphaInvalidParams() {
+    public void testGetCountryByAlphaCodeBadRequest() {
         Response response = givenDefaultRequest()
-            .pathParam("code", "TEST")
-            .queryParam("invalid", "parameter")
+            .pathParam("code", "TOOLONG")
         .when()
             .get("/v2/alpha/{code}")
         .then()
@@ -141,9 +128,9 @@ public class ApiIntegrationTest {
     }
 
     @Test
-    public void testGetAlphaNotFound() {
+    public void testGetCountryByAlphaCodeNotFound() {
         Response response = givenDefaultRequest()
-            .pathParam("code", "INVALID")
+            .pathParam("code", "ZZ")
         .when()
             .get("/v2/alpha/{code}")
         .then()
@@ -153,9 +140,9 @@ public class ApiIntegrationTest {
     }
 
     @Test
-    public void testGetCurrencySuccess() {
+    public void testGetCountryByCurrencySuccess() {
         Response response = givenDefaultRequest()
-            .pathParam("currency", "sample_value")
+            .pathParam("currency", "eur")
         .when()
             .get("/v2/currency/{currency}")
         .then()
@@ -171,10 +158,9 @@ public class ApiIntegrationTest {
     }
 
     @Test
-    public void testGetCurrencyInvalidParams() {
+    public void testGetCountryByCurrencyBadRequest() {
         Response response = givenDefaultRequest()
-            .pathParam("currency", "sample")
-            .queryParam("invalid", "parameter")
+            .pathParam("currency", "INVALID_CURRENCY_FORMAT")
         .when()
             .get("/v2/currency/{currency}")
         .then()
@@ -184,9 +170,9 @@ public class ApiIntegrationTest {
     }
 
     @Test
-    public void testGetCurrencyNotFound() {
+    public void testGetCountryByCurrencyNotFound() {
         Response response = givenDefaultRequest()
-            .pathParam("currency", "NotFound")
+            .pathParam("currency", "zzz")
         .when()
             .get("/v2/currency/{currency}")
         .then()
@@ -196,9 +182,9 @@ public class ApiIntegrationTest {
     }
 
     @Test
-    public void testGetLangSuccess() {
+    public void testGetCountryByLanguageSuccess() {
         Response response = givenDefaultRequest()
-            .pathParam("language", "sample_value")
+            .pathParam("language", "pt")
         .when()
             .get("/v2/lang/{language}")
         .then()
@@ -214,10 +200,9 @@ public class ApiIntegrationTest {
     }
 
     @Test
-    public void testGetLangInvalidParams() {
+    public void testGetCountryByLanguageBadRequest() {
         Response response = givenDefaultRequest()
-            .pathParam("language", "sample")
-            .queryParam("invalid", "parameter")
+            .pathParam("language", "INVALID_LANG_FORMAT")
         .when()
             .get("/v2/lang/{language}")
         .then()
@@ -227,9 +212,9 @@ public class ApiIntegrationTest {
     }
 
     @Test
-    public void testGetLangNotFound() {
+    public void testGetCountryByLanguageNotFound() {
         Response response = givenDefaultRequest()
-            .pathParam("language", "NotFound")
+            .pathParam("language", "zz")
         .when()
             .get("/v2/lang/{language}")
         .then()
@@ -239,9 +224,9 @@ public class ApiIntegrationTest {
     }
 
     @Test
-    public void testGetCapitalSuccess() {
+    public void testGetCountryByCapitalSuccess() {
         Response response = givenDefaultRequest()
-            .pathParam("capital", "sample_value")
+            .pathParam("capital", "lisbon")
         .when()
             .get("/v2/capital/{capital}")
         .then()
@@ -257,10 +242,9 @@ public class ApiIntegrationTest {
     }
 
     @Test
-    public void testGetCapitalInvalidParams() {
+    public void testGetCountryByCapitalBadRequest() {
         Response response = givenDefaultRequest()
-            .pathParam("capital", "sample")
-            .queryParam("invalid", "parameter")
+            .pathParam("capital", "!@#$%^&*()")
         .when()
             .get("/v2/capital/{capital}")
         .then()
@@ -270,9 +254,9 @@ public class ApiIntegrationTest {
     }
 
     @Test
-    public void testGetCapitalNotFound() {
+    public void testGetCountryByCapitalNotFound() {
         Response response = givenDefaultRequest()
-            .pathParam("capital", "NotFound")
+            .pathParam("capital", "NonExistentCapital")
         .when()
             .get("/v2/capital/{capital}")
         .then()
@@ -282,9 +266,9 @@ public class ApiIntegrationTest {
     }
 
     @Test
-    public void testGetRegionSuccess() {
+    public void testGetCountryByRegionSuccess() {
         Response response = givenDefaultRequest()
-            .pathParam("region", "sample_value")
+            .pathParam("region", "europe")
         .when()
             .get("/v2/region/{region}")
         .then()
@@ -300,10 +284,9 @@ public class ApiIntegrationTest {
     }
 
     @Test
-    public void testGetRegionInvalidParams() {
+    public void testGetCountryByRegionBadRequest() {
         Response response = givenDefaultRequest()
-            .pathParam("region", "sample")
-            .queryParam("invalid", "parameter")
+            .pathParam("region", "!@#$%^&*()")
         .when()
             .get("/v2/region/{region}")
         .then()
@@ -313,9 +296,9 @@ public class ApiIntegrationTest {
     }
 
     @Test
-    public void testGetRegionNotFound() {
+    public void testGetCountryByRegionNotFound() {
         Response response = givenDefaultRequest()
-            .pathParam("region", "NotFound")
+            .pathParam("region", "NonExistentRegion")
         .when()
             .get("/v2/region/{region}")
         .then()

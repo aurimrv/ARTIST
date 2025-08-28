@@ -343,7 +343,7 @@ class PlannerAgent(BaseAgent):
                 description=f"Test {endpoint.method} {endpoint.path} - positive case",
                 endpoint=endpoint.path,
                 method=endpoint.method,
-                parameters=self._extract_parameters(endpoint),
+                parameters=await self._extract_parameters(endpoint),
                 expected_status=200,
                 is_negative_test=False
             ))
@@ -404,35 +404,15 @@ class PlannerAgent(BaseAgent):
                 description=f"Test {endpoint.method} {endpoint.path} - success case",
                 endpoint=endpoint.path,
                 method=endpoint.method,
-                parameters=self._extract_parameters(endpoint),
+                parameters=await self._extract_parameters(endpoint),
                 expected_status=200,
                 is_negative_test=False
             ))
             
-            # Generate negative test scenarios if enabled
+            # Generate negative test scenarios based on endpoint characteristics
             if self.system_config.test_generation.generate_negative_tests:
-                # Invalid parameter test
-                scenarios.append(TestScenario(
-                    name=f"test_{endpoint.method.lower()}_{self._sanitize_path(endpoint.path)}_invalid_params",
-                    description=f"Test {endpoint.method} {endpoint.path} - invalid parameters",
-                    endpoint=endpoint.path,
-                    method=endpoint.method,
-                    parameters={'invalid': 'parameter'},
-                    expected_status=400,
-                    is_negative_test=True
-                ))
-                
-                # Not found test for endpoints with path parameters
-                if '{' in endpoint.path:
-                    scenarios.append(TestScenario(
-                        name=f"test_{endpoint.method.lower()}_{self._sanitize_path(endpoint.path)}_not_found",
-                        description=f"Test {endpoint.method} {endpoint.path} - resource not found",
-                        endpoint=endpoint.path,
-                        method=endpoint.method,
-                        parameters=self._generate_not_found_parameters(endpoint),
-                        expected_status=404,
-                        is_negative_test=True
-                    ))
+                negative_scenarios = await self._generate_negative_scenarios_for_endpoint(endpoint)
+                scenarios.extend(negative_scenarios)
         
         self.logger.info(f"Generated {len(scenarios)} scenarios from OpenAPI specification")
         return scenarios
@@ -457,22 +437,191 @@ class PlannerAgent(BaseAgent):
         
         return merged
     
-    def _generate_not_found_parameters(self, endpoint) -> Dict[str, Any]:
-        """Generate parameters that should result in 404 responses."""
-        params = {}
+    async def _generate_negative_scenarios_for_endpoint(self, endpoint) -> List[TestScenario]:
+        """
+        Generate negative test scenarios based on endpoint characteristics and response codes.
+        
+        Args:
+            endpoint: API endpoint specification
+        
+        Returns:
+            List of negative test scenarios
+        """
+        scenarios = []
+        
+        # Only generate parameter-based tests if endpoint has parameters
+        if endpoint.parameters and len(endpoint.parameters) > 0:
+            # Analyze response codes to determine what negative tests to generate
+            response_codes = endpoint.responses.keys() if endpoint.responses else []
+            
+            # Generate 400 Bad Request tests if defined in responses
+            if '400' in response_codes:
+                bad_request_scenarios = await self._generate_bad_request_scenarios(endpoint)
+                scenarios.extend(bad_request_scenarios)
+            
+            # Generate 404 Not Found tests if defined in responses
+            if '404' in response_codes:
+                not_found_scenarios = await self._generate_not_found_scenarios(endpoint)
+                scenarios.extend(not_found_scenarios)
+        
+        # Generate other error scenarios based on response codes
+        for status_code in endpoint.responses.keys() if endpoint.responses else []:
+            if status_code.startswith('4') and status_code not in ['400', '404']:
+                # Generate scenarios for other 4xx errors
+                scenarios.extend(await self._generate_custom_error_scenarios(endpoint, status_code))
+            elif status_code.startswith('5'):
+                # Generate scenarios for 5xx errors (usually server errors, harder to test)
+                pass  # Skip server errors for now
+        
+        return scenarios
+    
+    async def _generate_bad_request_scenarios(self, endpoint) -> List[TestScenario]:
+        """Generate scenarios that should result in 400 Bad Request."""
+        scenarios = []
+        
         for param in endpoint.parameters:
-            if param.get('in') == 'path':
-                param_name = param.get('name', 'id')
-                # Use values that are unlikely to exist
-                if 'id' in param_name.lower():
-                    params[param_name] = '999999'
-                elif 'name' in param_name.lower():
-                    params[param_name] = 'NonExistentResource'
-                elif 'code' in param_name.lower():
-                    params[param_name] = 'INVALID'
+            param_name = param.get('name', 'unknown')
+            param_description = param.get('description', '').lower()
+            param_schema = param.get('schema', {})
+            
+            # Generate format-invalid parameters based on description
+            invalid_params = await self._generate_format_invalid_parameters(endpoint)
+            
+            scenarios.append(TestScenario(
+                name=f"test_{endpoint.method.lower()}_{self._sanitize_path(endpoint.path)}_bad_request_{param_name}",
+                description=f"Test {endpoint.method} {endpoint.path} - bad request with invalid {param_name}",
+                endpoint=endpoint.path,
+                method=endpoint.method,
+                parameters=invalid_params,
+                expected_status=400,
+                is_negative_test=True
+            ))
+            
+            # Only generate one 400 test per endpoint to avoid duplication
+            break
+        
+        return scenarios
+    
+    async def _generate_not_found_scenarios(self, endpoint) -> List[TestScenario]:
+        """Generate scenarios that should result in 404 Not Found."""
+        scenarios = []
+        
+        # Only generate 404 tests for endpoints with path parameters
+        if '{' in endpoint.path:
+            not_found_params = await self._generate_not_found_parameters_smart(endpoint)
+            
+            scenarios.append(TestScenario(
+                name=f"test_{endpoint.method.lower()}_{self._sanitize_path(endpoint.path)}_not_found",
+                description=f"Test {endpoint.method} {endpoint.path} - resource not found",
+                endpoint=endpoint.path,
+                method=endpoint.method,
+                parameters=not_found_params,
+                expected_status=404,
+                is_negative_test=True
+            ))
+        
+        return scenarios
+    
+    async def _generate_custom_error_scenarios(self, endpoint, status_code: str) -> List[TestScenario]:
+        """Generate scenarios for custom error codes."""
+        # For now, skip custom error scenarios as they're usually edge cases
+        return []
+    
+    async def _generate_format_invalid_parameters(self, endpoint) -> Dict[str, Any]:
+        """Generate parameters that are format-invalid (should cause 400)."""
+        parameters = {}
+        
+        for param in endpoint.parameters:
+            param_name = param.get('name', 'unknown')
+            param_description = param.get('description', '').lower()
+            param_schema = param.get('schema', {})
+            param_type = param_schema.get('type', 'string')
+            
+            # Generate format-invalid values based on parameter description
+            if 'iso' in param_description and 'alpha' in param_description:
+                # For ISO codes, use values that are too long (should be 2-3 chars)
+                if 'alpha-2' in param_description:
+                    parameters[param_name] = 'TOOLONG'  # Too long for alpha-2
+                elif 'alpha-3' in param_description:
+                    parameters[param_name] = 'WAYTOOLONG'  # Too long for alpha-3
                 else:
-                    params[param_name] = 'NotFound'
-        return params
+                    parameters[param_name] = 'INVALIDFORMAT123'  # Invalid format
+            elif 'currency' in param_description and 'iso' in param_description:
+                # For ISO currency codes, use invalid format
+                parameters[param_name] = 'INVALID_CURRENCY_FORMAT'
+            elif 'language' in param_description and 'iso' in param_description:
+                # For ISO language codes, use invalid format
+                parameters[param_name] = 'INVALID_LANG_FORMAT'
+            elif param_type == 'integer':
+                # For integers, use string that can't be parsed
+                parameters[param_name] = 'not_a_number'
+            elif param_type == 'boolean':
+                # For booleans, use invalid string
+                parameters[param_name] = 'not_a_boolean'
+            else:
+                # For other string parameters, use special characters that might cause parsing issues
+                parameters[param_name] = '!@#$%^&*()'
+        
+        return parameters
+    
+    async def _generate_not_found_parameters_smart(self, endpoint) -> Dict[str, Any]:
+        """Generate parameters that are format-valid but should result in 404."""
+        parameters = {}
+        
+        for param in endpoint.parameters:
+            param_name = param.get('name', 'unknown')
+            param_description = param.get('description', '').lower()
+            param_schema = param.get('schema', {})
+            
+            # Generate format-valid but non-existent values
+            if 'iso' in param_description and 'alpha' in param_description:
+                # For ISO codes, use valid format but non-existent country codes
+                if 'alpha-2' in param_description:
+                    parameters[param_name] = 'ZZ'  # Valid format, non-existent country
+                elif 'alpha-3' in param_description:
+                    parameters[param_name] = 'ZZZ'  # Valid format, non-existent country
+                else:
+                    parameters[param_name] = 'XX'  # Generic non-existent code
+            elif 'currency' in param_description:
+                # For currency codes, use valid format but non-existent currency
+                parameters[param_name] = 'zzz'  # Valid format, non-existent currency
+            elif 'language' in param_description:
+                # For language codes, use valid format but non-existent language
+                parameters[param_name] = 'zz'  # Valid format, non-existent language
+            elif 'country' in param_description or param_name.lower() in ['name', 'country']:
+                # For country names, use non-existent country
+                parameters[param_name] = 'NonExistentCountry'
+            elif 'capital' in param_description or param_name.lower() == 'capital':
+                # For capital cities, use non-existent capital
+                parameters[param_name] = 'NonExistentCapital'
+            elif 'region' in param_description or param_name.lower() == 'region':
+                # For regions, use non-existent region
+                parameters[param_name] = 'NonExistentRegion'
+            else:
+                # Generic non-existent value
+                parameters[param_name] = 'NonExistent'
+        
+        return parameters
+
+    def _merge_scenarios(self, primary_scenarios: List[TestScenario], secondary_scenarios: List[TestScenario]) -> List[TestScenario]:
+        """
+        Merge two lists of scenarios, avoiding duplicates.
+        
+        Args:
+            primary_scenarios: Primary scenarios (higher priority)
+            secondary_scenarios: Secondary scenarios
+        
+        Returns:
+            Merged list of scenarios
+        """
+        merged = primary_scenarios.copy()
+        primary_names = {scenario.name for scenario in primary_scenarios}
+        
+        for scenario in secondary_scenarios:
+            if scenario.name not in primary_names:
+                merged.append(scenario)
+        
+        return merged
 
     async def _validate_scenarios(self, scenarios: List[TestScenario], api_spec: Any) -> List[TestScenario]:
         """
@@ -671,21 +820,189 @@ class PlannerAgent(BaseAgent):
         """Sanitize path for use in method names."""
         return path.replace('/', '_').replace('{', '').replace('}', '').replace('-', '_')
     
-    def _extract_parameters(self, endpoint) -> Dict[str, Any]:
-        """Extract parameters from endpoint specification."""
+    async def _extract_parameters(self, endpoint) -> Dict[str, Any]:
+        """Extract valid parameters from endpoint specification using examples or LLM inference."""
+        return await self._extract_valid_parameters(endpoint)
+    
+    async def _extract_valid_parameters(self, endpoint) -> Dict[str, Any]:
+        """Extract valid parameters for success test cases."""
         parameters = {}
         
         for param in endpoint.parameters:
             param_name = param.get('name', 'unknown')
-            param_type = param.get('schema', {}).get('type', 'string')
+            param_schema = param.get('schema', {})
+            param_type = param_schema.get('type', 'string')
             
-            # Generate sample value based on type
-            if param_type == 'integer':
-                parameters[param_name] = 1
-            elif param_type == 'boolean':
-                parameters[param_name] = True
-            else:
-                parameters[param_name] = 'sample_value'
+            # First, try to use example from specification
+            if 'example' in param_schema:
+                parameters[param_name] = param_schema['example']
+                continue
+            
+            # Second, try to use enum values
+            if 'enum' in param_schema and param_schema['enum']:
+                parameters[param_name] = param_schema['enum'][0]  # Use first enum value
+                continue
+            
+            # Third, generate realistic values based on parameter name and type
+            realistic_value = self._generate_realistic_parameter_value(param_name, param_type, param.get('description', ''))
+            
+            # Fourth, use LLM as fallback if we couldn't generate a good value
+            if realistic_value == 'test_value' and self.openrouter_client:
+                llm_value = await self._generate_parameter_with_llm(param_name, param_type, param.get('description', ''), endpoint.path)
+                if llm_value:
+                    realistic_value = llm_value
+            
+            parameters[param_name] = realistic_value
         
         return parameters
+    
+    async def _generate_parameter_with_llm(self, param_name: str, param_type: str, description: str, endpoint_path: str) -> Optional[str]:
+        """Use LLM to generate realistic parameter values when rule-based approach fails."""
+        try:
+            prompt = f"""Generate a realistic value for the API parameter:
+
+Parameter name: {param_name}
+Parameter type: {param_type}
+Description: {description}
+Endpoint: {endpoint_path}
+
+Requirements:
+1. The value must be realistic and likely to exist in a real API
+2. For country-related APIs, use real country data
+3. For codes, use valid format (e.g., ISO codes)
+4. Return ONLY the parameter value, no explanations
+
+Example responses:
+- For country name: "portugal"
+- For country code: "pt"
+- For currency: "eur"
+- For language: "pt"
+- For region: "europe"
+
+Parameter value:"""
+
+            response = await self.openrouter_client.generate_text(
+                prompt=prompt,
+                model=self.get_model_name(),
+                max_tokens=50,
+                temperature=0.1  # Low temperature for consistent results
+            )
+            
+            if response and len(response.strip()) > 0:
+                # Clean the response and return first word/value
+                value = response.strip().split()[0].strip('"\'')
+                return value
+                
+        except Exception as e:
+            self.logger.warning(f"LLM parameter generation failed: {e}")
+        
+        return None
+    
+    def _extract_invalid_parameters(self, endpoint) -> Dict[str, Any]:
+        """Extract invalid parameters for negative test cases."""
+        parameters = {}
+        
+        for param in endpoint.parameters:
+            param_name = param.get('name', 'unknown')
+            param_schema = param.get('schema', {})
+            param_type = param_schema.get('type', 'string')
+            
+            # Generate truly invalid values that should cause 400 errors
+            invalid_value = self._generate_invalid_parameter_value(param_name, param_type, param.get('description', ''))
+            parameters[param_name] = invalid_value
+        
+        return parameters
+    
+    def _generate_realistic_parameter_value(self, param_name: str, param_type: str, description: str) -> Any:
+        """Generate realistic parameter values based on name, type, and description."""
+        param_name_lower = param_name.lower()
+        description_lower = description.lower()
+        
+        # Handle different parameter types
+        if param_type == 'integer':
+            if 'id' in param_name_lower:
+                return 1
+            elif 'page' in param_name_lower:
+                return 1
+            elif 'limit' in param_name_lower or 'size' in param_name_lower:
+                return 10
+            else:
+                return 1
+        
+        elif param_type == 'boolean':
+            return True
+        
+        elif param_type == 'number':
+            return 1.0
+        
+        else:  # string type
+            # Country-specific parameters
+            if param_name_lower in ['name', 'country', 'countryname']:
+                return 'portugal'
+            elif param_name_lower in ['code', 'alpha', 'countrycode', 'alpha2', 'alpha3']:
+                return 'pt'
+            elif param_name_lower in ['currency', 'currencycode']:
+                return 'eur'
+            elif param_name_lower in ['language', 'lang', 'languagecode']:
+                return 'pt'
+            elif param_name_lower in ['capital', 'capitalcity']:
+                return 'lisbon'
+            elif param_name_lower in ['region', 'regionname']:
+                return 'europe'
+            
+            # Generic parameters based on description
+            elif 'iso' in description_lower and 'alpha' in description_lower:
+                return 'pt'
+            elif 'currency' in description_lower:
+                return 'eur'
+            elif 'language' in description_lower:
+                return 'pt'
+            elif 'region' in description_lower:
+                return 'europe'
+            elif 'capital' in description_lower:
+                return 'lisbon'
+            elif 'country' in description_lower:
+                return 'portugal'
+            
+            # Generic fallbacks
+            elif 'id' in param_name_lower:
+                return '123'
+            elif 'email' in param_name_lower:
+                return 'test@example.com'
+            elif 'phone' in param_name_lower:
+                return '+1234567890'
+            elif 'url' in param_name_lower:
+                return 'https://example.com'
+            else:
+                return 'test_value'
+    
+    def _generate_invalid_parameter_value(self, param_name: str, param_type: str, description: str) -> Any:
+        """Generate invalid parameter values that should cause 400 errors."""
+        param_name_lower = param_name.lower()
+        
+        # Handle different parameter types
+        if param_type == 'integer':
+            return 'not_a_number'  # String instead of integer
+        
+        elif param_type == 'boolean':
+            return 'not_a_boolean'  # String instead of boolean
+        
+        elif param_type == 'number':
+            return 'not_a_number'  # String instead of number
+        
+        else:  # string type
+            # Generate values that are syntactically invalid for the expected format
+            if 'email' in param_name_lower:
+                return 'invalid_email'
+            elif 'url' in param_name_lower:
+                return 'not_a_url'
+            elif 'phone' in param_name_lower:
+                return 'invalid_phone'
+            elif 'code' in param_name_lower and ('iso' in description.lower() or 'alpha' in description.lower()):
+                return '123456789'  # Too long for ISO codes
+            elif 'currency' in param_name_lower or 'currency' in description.lower():
+                return 'INVALID_CURRENCY_CODE'
+            else:
+                # Use special characters that might cause parsing issues
+                return '!@#$%^&*()'
 
