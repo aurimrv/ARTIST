@@ -188,7 +188,7 @@ class CoordinatorAgent(BaseAgent):
         errors = super().validate_input(input_data)
         
         required_fields = [
-            'base_url', 'api_spec_path', 'api_src_path', 
+            'base_url', 'api_spec_path', 
             'output_dir', 'package_name', 'main_test_class_name'
         ]
         
@@ -199,12 +199,12 @@ class CoordinatorAgent(BaseAgent):
                 errors.append(f"Empty value for required field: {field}")
         
         # Validate paths exist
-        if 'api_spec_path' in input_data:
+        if 'api_spec_path' in input_data and input_data['api_spec_path']:
             spec_path = Path(input_data['api_spec_path'])
             if not spec_path.exists():
                 errors.append(f"API specification file not found: {spec_path}")
         
-        if 'api_src_path' in input_data:
+        if 'api_src_path' in input_data and input_data['api_src_path']:
             src_path = Path(input_data['api_src_path'])
             if not src_path.exists():
                 errors.append(f"API source directory not found: {src_path}")
@@ -224,7 +224,7 @@ class CoordinatorAgent(BaseAgent):
         return ProjectContext(
             base_url=input_data['base_url'],
             api_spec_path=Path(input_data['api_spec_path']),
-            api_src_path=Path(input_data['api_src_path']),
+            api_src_path=Path(input_data['api_src_path']) if input_data['api_src_path'] else None,
             output_dir=Path(input_data['output_dir']),
             package_name=input_data['package_name'],
             main_test_class_name=input_data['main_test_class_name']
@@ -377,7 +377,7 @@ class CoordinatorAgent(BaseAgent):
         
         planning_input = {
             'api_spec_path': str(context.api_spec_path),
-            'api_src_path': str(context.api_src_path),
+            'api_src_path': str(context.api_src_path) if context.api_src_path is not None else None,
             'base_url': context.base_url
         }
         

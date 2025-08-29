@@ -48,8 +48,12 @@ class RestEndpoint:
     java_method: str
     java_class: str
     parameters: List[Dict[str, str]]
-    return_type: str
-    annotations: List[str]
+    return_type: str = ""
+    annotations: List[str] = None
+    
+    def __post_init__(self):
+        if self.annotations is None:
+            self.annotations = []
 
 
 class JavaParser(LoggerMixin):

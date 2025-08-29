@@ -66,7 +66,7 @@ class ProjectContext:
     """Context for a test generation project."""
     base_url: str
     api_spec_path: Path
-    api_src_path: Path
+    api_src_path: Optional[Path]
     output_dir: Path
     package_name: str
     main_test_class_name: str

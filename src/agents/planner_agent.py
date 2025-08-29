@@ -79,9 +79,15 @@ class PlannerAgent(BaseAgent):
                     'scenarios': []
                 }
             
-            # Step 2: Analyze implementation
-            self.log_progress("Analyzing API implementation", 2, 4)
-            implementation_analysis = await self._analyze_implementation(input_data['api_src_path'])
+            # Step 2: Analyze implementation (optional)
+            implementation_analysis = None
+            api_src_path = input_data.get('api_src_path')
+            
+            if api_src_path:
+                self.log_progress("Analyzing API implementation", 2, 4)
+                implementation_analysis = await self._analyze_implementation(api_src_path)
+            else:
+                self.logger.info("No API source code provided - generating tests based only on specification")
             
             # Step 3: Generate test scenarios
             self.log_progress("Generating test scenarios", 3, 4)
@@ -125,21 +131,22 @@ class PlannerAgent(BaseAgent):
         """
         errors = super().validate_input(input_data)
         
-        required_fields = ['api_spec_path', 'api_src_path']
+        # Only api_spec_path is required, api_src_path is optional
+        required_fields = ['api_spec_path']
         
         for field in required_fields:
             if field not in input_data:
                 errors.append(f"Missing required field: {field}")
             elif not input_data[field]:
-                errors.append(f"Empty value for required field: {field}")
+                errors.append(f"Empty required field: {field}")
         
-        # Validate paths exist
-        if 'api_spec_path' in input_data:
+        # Validate paths exist if provided
+        if 'api_spec_path' in input_data and input_data['api_spec_path']:
             spec_path = Path(input_data['api_spec_path'])
             if not spec_path.exists():
                 errors.append(f"API specification file not found: {spec_path}")
         
-        if 'api_src_path' in input_data:
+        if 'api_src_path' in input_data and input_data['api_src_path']:
             src_path = Path(input_data['api_src_path'])
             if not src_path.exists():
                 errors.append(f"API source directory not found: {src_path}")
@@ -258,7 +265,7 @@ class PlannerAgent(BaseAgent):
     async def _generate_test_scenarios(
         self,
         api_spec: Any,
-        implementation_analysis: Dict[str, Any],
+        implementation_analysis: Optional[Dict[str, Any]],
         base_url: str
     ) -> List[TestScenario]:
         """
@@ -266,7 +273,7 @@ class PlannerAgent(BaseAgent):
         
         Args:
             api_spec: Parsed API specification
-            implementation_analysis: Analysis of the implementation
+            implementation_analysis: Analysis of the implementation (optional)
             base_url: Base URL for the API
         
         Returns:
@@ -275,6 +282,14 @@ class PlannerAgent(BaseAgent):
         try:
             # Always prioritize rule-based generation from OpenAPI spec
             scenarios = await self._generate_scenarios_from_openapi(api_spec, base_url)
+            
+            # If we have implementation analysis, try to add scenarios from source code
+            if implementation_analysis and implementation_analysis.get('rest_endpoints'):
+                source_scenarios = await self._generate_scenarios_from_source_code(
+                    implementation_analysis, base_url
+                )
+                scenarios.extend(source_scenarios)
+                self.logger.info(f"Added {len(source_scenarios)} scenarios from source code analysis")
             
             if len(scenarios) < len(api_spec.endpoints):
                 self.logger.warning("Rule-based generation incomplete, trying LLM enhancement")
@@ -414,7 +429,46 @@ class PlannerAgent(BaseAgent):
                 negative_scenarios = await self._generate_negative_scenarios_for_endpoint(endpoint)
                 scenarios.extend(negative_scenarios)
         
-        self.logger.info(f"Generated {len(scenarios)} scenarios from OpenAPI specification")
+        return scenarios
+    
+    async def _generate_scenarios_from_source_code(
+        self, 
+        implementation_analysis: Dict[str, Any], 
+        base_url: str
+    ) -> List[TestScenario]:
+        """
+        Generate test scenarios from source code analysis (additional endpoints not in spec).
+        
+        Args:
+            implementation_analysis: Analysis of the implementation
+            base_url: Base URL for the API
+        
+        Returns:
+            List of test scenarios for additional endpoints
+        """
+        scenarios = []
+        
+        rest_endpoints = implementation_analysis.get('rest_endpoints', [])
+        
+        for endpoint in rest_endpoints:
+            # Create a basic test scenario for each endpoint found in source code
+            # but not covered by the OpenAPI specification
+            endpoint_method = endpoint.get('method', 'GET')
+            endpoint_path = endpoint.get('path', '/')
+            
+            scenario_name = f"test_{endpoint_method.lower()}_{self._sanitize_path(endpoint_path)}_source_code"
+            
+            scenarios.append(TestScenario(
+                name=scenario_name,
+                description=f"Test {endpoint_method} {endpoint_path} (found in source code)",
+                endpoint=endpoint_path,
+                method=endpoint_method,
+                parameters={},
+                expected_status=200,
+                is_negative_test=False
+            ))
+        
+        self.logger.info(f"Generated {len(scenarios)} scenarios from source code analysis")
         return scenarios
     
     def _merge_scenarios(self, primary_scenarios: List[TestScenario], secondary_scenarios: List[TestScenario]) -> List[TestScenario]:
@@ -650,15 +704,21 @@ class PlannerAgent(BaseAgent):
                 validated_scenarios.append(scenario)
                 self.logger.debug(f"Validated scenario: {scenario.method} {scenario.endpoint}")
             else:
-                # For scenarios generated from OpenAPI spec, they should always be valid
-                # Only warn for LLM-generated scenarios that don't match
-                if not any(scenario.endpoint == ep.path for ep in api_spec.endpoints):
-                    self.logger.warning(
-                        f"Scenario endpoint not found in specification: {scenario.method} {scenario.endpoint}"
-                    )
-                else:
-                    # This is likely a scenario generated from the spec, keep it
+                # Check if this is a scenario from source code analysis
+                if "source_code" in scenario.name:
+                    # Keep scenarios from source code analysis even if not in specification
                     validated_scenarios.append(scenario)
+                    self.logger.info(f"Keeping source code scenario: {scenario.method} {scenario.endpoint}")
+                else:
+                    # For scenarios generated from OpenAPI spec, they should always be valid
+                    # Only warn for LLM-generated scenarios that don't match
+                    if not any(scenario.endpoint == ep.path for ep in api_spec.endpoints):
+                        self.logger.warning(
+                            f"Scenario endpoint not found in specification: {scenario.method} {scenario.endpoint}"
+                        )
+                    else:
+                        # This is likely a scenario generated from the spec, keep it
+                        validated_scenarios.append(scenario)
         
         return validated_scenarios
     

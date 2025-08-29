@@ -28,7 +28,10 @@ def create_argument_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Generate tests for an API
+  # Generate tests based only on API specification
+  python main.py generate --api-spec api.yaml --output tests/
+
+  # Generate tests for API specification + source code analysis
   python main.py generate --api-spec api.yaml --api-src src/main/java --output tests/
 
   # Generate tests with custom base URL
@@ -40,8 +43,8 @@ Examples:
   # Generate with custom configuration
   python main.py generate --api-spec api.yaml --api-src src/ --output tests/ --config custom.env
 
-  # Generate with specific package name
-  python main.py generate --api-spec api.yaml --api-src src/ --output tests/ --package com.example.tests
+  # Generate with specific package name (no source code)
+  python main.py generate --api-spec api.yaml --output tests/ --package com.example.tests
         """
     )
     
@@ -79,8 +82,8 @@ Examples:
     generate_parser.add_argument(
         '--api-src',
         type=Path,
-        required=True,
-        help='Path to API source code directory (Java Maven project)'
+        required=False,
+        help='Path to API source code directory (Java Maven project). Optional - if not provided, tests will be generated based only on the API specification.'
     )
     generate_parser.add_argument(
         '--output', '-o',
@@ -190,7 +193,7 @@ async def generate_command(args: argparse.Namespace) -> int:
             logger.error(f"API specification file not found: {args.api_spec}")
             return 1
         
-        if not args.api_src.exists():
+        if args.api_src and not args.api_src.exists():
             logger.error(f"API source directory not found: {args.api_src}")
             return 1
         
@@ -213,7 +216,7 @@ async def generate_command(args: argparse.Namespace) -> int:
         input_data = {
             'base_url': context.base_url,
             'api_spec_path': str(context.api_spec_path),
-            'api_src_path': str(context.api_src_path),
+            'api_src_path': str(context.api_src_path) if context.api_src_path is not None else None,
             'output_dir': str(context.output_dir),
             'package_name': context.package_name,
             'main_test_class_name': context.main_test_class_name,
@@ -254,10 +257,13 @@ async def generate_command(args: argparse.Namespace) -> int:
 
 def create_project_context(args: argparse.Namespace) -> ProjectContext:
     """Create project context from command line arguments."""
-    # Auto-detect package name if not provided
+    # Auto-detect package name if not provided and api_src is available
     package_name = args.package
-    if not package_name:
+    if not package_name and args.api_src:
         package_name = auto_detect_package_name(args.api_src)
+    elif not package_name:
+        # Default package name when no source code is provided
+        package_name = 'com.example.api.tests'
     
     # Set default class name if not provided
     class_name = args.class_name or 'ApiIntegrationTest'
@@ -268,7 +274,7 @@ def create_project_context(args: argparse.Namespace) -> ProjectContext:
     return ProjectContext(
         base_url=args.base_url,
         api_spec_path=args.api_spec,
-        api_src_path=args.api_src,
+        api_src_path=args.api_src,  # Can be None
         package_name=package_name,
         main_test_class_name=class_name,
         output_dir=args.output,
