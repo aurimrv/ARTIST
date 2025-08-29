@@ -84,7 +84,7 @@ class GeneratorAgent(BaseAgent):
             # Step 2: Generate test classes
             self.log_progress("Generating test classes", 2, 4)
             generated_files = await self._generate_test_classes(context, scenarios)
-            
+
             # Step 3: Enhance with LLM if available
             if self.openrouter_client and generated_files:
                 self.log_progress("Enhancing tests with LLM", 3, 4)
@@ -316,7 +316,9 @@ class GeneratorAgent(BaseAgent):
                 
                 # Prepare context for LLM
                 project_context_str = self._format_project_context_for_llm(context)
-                
+
+                self.logger.info(f"Generator MAX_TOKENS: {self.get_max_tokens()}")
+
                 # Generate enhanced code using LLM
                 enhanced_content = await self.openrouter_client.generate_test_code(
                     scenarios=current_content,  # Use current content as scenarios
@@ -325,7 +327,8 @@ class GeneratorAgent(BaseAgent):
                     max_tokens=self.get_max_tokens(),
                     temperature=self.get_temperature()
                 )
-                
+
+
                 # Sanitize LLM output to remove commentary and extract only code
                 if enhanced_content:
                     self.logger.info(f"Sanitizing LLM output for {file_path}")
@@ -339,7 +342,7 @@ class GeneratorAgent(BaseAgent):
                 else:
                     self.logger.warning(f"LLM enhancement failed for {file_path}, keeping original")
                     enhanced_files.append(file_path)
-            
+
             return enhanced_files
             
         except Exception as e:

@@ -82,7 +82,7 @@ class Settings:
             agents[agent_name] = AgentConfig(
                 name=agent_name,
                 model=model,
-                max_tokens=int(os.getenv(f'{agent_name.upper()}_MAX_TOKENS', '4000')),
+                max_tokens=int(os.getenv(f'{agent_name.upper()}_MAX_TOKENS', '16000')),
                 temperature=float(os.getenv(f'{agent_name.upper()}_TEMPERATURE', '0.1')),
                 timeout=int(os.getenv(f'{agent_name.upper()}_TIMEOUT', '60'))
             )

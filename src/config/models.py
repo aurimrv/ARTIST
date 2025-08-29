@@ -12,7 +12,7 @@ class AgentConfig:
     """Configuration for individual agents."""
     name: str
     model: str
-    max_tokens: int = 4000
+    max_tokens: int = 16000
     temperature: float = 0.1
     timeout: int = 60
     
