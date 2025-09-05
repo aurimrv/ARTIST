@@ -1,3 +1,5 @@
+# Output generted_test with timestamp
+
 # Parameters
 
 --api-spec (opcional) --api-src (mandatory)
@@ -8,8 +10,6 @@
 ## Criar um relatório que demonstre quais testes foram criados para quais itens da especificação em OpenAPI
 
 # Code Coverage (open-box)
-
-## Parametro --api-src pode ser opcional
 
 ## Configurável desde que exista o código fonte .env
 

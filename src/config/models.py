@@ -3,9 +3,18 @@ Data models for configuration and system state.
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Optional, Dict, Any
 from pathlib import Path
 
+def create_timestamp() -> str:
+    """
+    Cria um timestamp formatado.
+
+    Returns:
+        str: Timestamp atual formatado
+    """
+    return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
 @dataclass
 class AgentConfig:
@@ -77,8 +86,9 @@ class ProjectContext:
     
     def __post_init__(self):
         """Initialize derived paths."""
+        timestamp = create_timestamp()
         if self.generated_test_dir is None:
-            self.generated_test_dir = self.output_dir / "generated-tests"
+            self.generated_test_dir = self.output_dir / f"generated-tests_{timestamp}"
         if self.maven_project_dir is None:
             self.maven_project_dir = self.generated_test_dir / "maven-project"
 
@@ -95,6 +105,9 @@ class TestScenario:
     expected_response_schema: Optional[Dict[str, Any]] = None
     is_negative_test: bool = False
     test_data: Optional[Dict[str, Any]] = None
+    workflow_step: Optional[int] = None
+    workflow_name: Optional[str] = None
+    depends_on_previous_step: bool = False
 
 
 @dataclass

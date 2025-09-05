@@ -4,8 +4,7 @@ File and directory utilities for the API Test Generator System.
 
 import shutil
 from pathlib import Path
-from typing import Optional, Union
-
+from typing import Union
 
 def ensure_directory(path: Union[str, Path]) -> Path:
     """
@@ -181,4 +180,3 @@ def is_json_file(path: Union[str, Path]) -> bool:
         True if file has .json extension
     """
     return Path(path).suffix.lower() == '.json'
-

@@ -4,13 +4,14 @@ Test_Corrector Agent for fixing test execution failures.
 
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 
 from .base_agent import BaseAgent
 from ..config.models import AgentConfig, SystemConfig
 from ..utils import OpenRouterClient, CodeSanitizer
 from ..utils.maven_runner import MavenRunner, MavenResult
+from ..utils.test_versioning import TestVersionManager
 
 
 @dataclass
@@ -41,6 +42,7 @@ class TestCorrectorAgent(BaseAgent):
         self.openrouter_client = None
         self.max_correction_attempts = 3
         self.test_timeout = 300  # 5 minutes
+        self.version_manager = None  # Will be initialized when project_dir is known
     
     async def _initialize_impl(self):
         """Initialize the test corrector agent components."""
@@ -81,12 +83,17 @@ class TestCorrectorAgent(BaseAgent):
             project_dir = Path(input_data['project_dir'])
             generated_files = [Path(f) for f in input_data['generated_files']]
             
+            # Initialize version manager for this project
+            if not self.version_manager:
+                self.version_manager = TestVersionManager(project_dir)
+                self.logger.info(f"Initialized test version manager for project: {project_dir}")
+            
             self.log_progress("Starting test execution and failure correction")
             
             # Step 1: Initial test run
             self.log_progress("Running initial tests", 1, 4)
             test_result = await self._run_tests(project_dir)
-            
+
             if test_result['success'] and test_result['failures'] == 0:
                 self.logger.info("All tests passed - no corrections needed")
                 return {
@@ -192,8 +199,17 @@ class TestCorrectorAgent(BaseAgent):
                 'statistics': {}
             }
             
-            # Parse test results
-            test_statistics = self._parse_test_statistics(maven_result)
+            # Parse test results - try XML first, then fallback to Maven output
+            xml_statistics = self._parse_test_statistics_from_xml(project_dir)
+            if xml_statistics['tests_run'] > 0:
+                # XML statistics available and valid
+                test_statistics = xml_statistics
+                self.logger.info("Using XML-based test statistics")
+            else:
+                # Fallback to Maven output parsing
+                test_statistics = self._parse_test_statistics(maven_result)
+                self.logger.info("Using Maven output-based test statistics")
+            
             result['statistics'] = test_statistics
             result['failures'] = test_statistics.get('failures', 0)
             result['errors'] = test_statistics.get('errors', 0)
@@ -224,7 +240,8 @@ class TestCorrectorAgent(BaseAgent):
                 'statistics': {}
             }
     
-    def _parse_test_statistics(self, maven_result: MavenResult) -> Dict[str, Any]:
+    @staticmethod
+    def _parse_test_statistics(maven_result: MavenResult) -> Dict[str, Any]:
         """Parse test statistics from Maven output."""
         output = maven_result.stdout + "\n" + maven_result.stderr
         
@@ -251,21 +268,68 @@ class TestCorrectorAgent(BaseAgent):
         
         return statistics
     
+    def _parse_test_statistics_from_xml(self, project_dir: Path) -> Dict[str, Any]:
+        """Parse test statistics from Surefire XML reports (more reliable)."""
+        import xml.etree.ElementTree as ET
+        
+        statistics = {
+            'tests_run': 0,
+            'failures': 0,
+            'errors': 0,
+            'skipped': 0
+        }
+        
+        surefire_dir = project_dir / "target" / "surefire-reports"
+        if not surefire_dir.exists():
+            self.logger.warning(f"Surefire reports directory not found: {surefire_dir}")
+            return statistics
+        
+        # Parse all XML report files
+        for xml_file in surefire_dir.glob("TEST-*.xml"):
+            try:
+                tree = ET.parse(xml_file)
+                root = tree.getroot()
+                
+                # Extract statistics from testsuite element
+                if root.tag == 'testsuite':
+                    statistics['tests_run'] += int(root.get('tests', 0))
+                    statistics['failures'] += int(root.get('failures', 0))
+                    statistics['errors'] += int(root.get('errors', 0))
+                    statistics['skipped'] += int(root.get('skipped', 0))
+                elif root.tag == 'testsuites':
+                    for testsuite in root.findall('testsuite'):
+                        statistics['tests_run'] += int(testsuite.get('tests', 0))
+                        statistics['failures'] += int(testsuite.get('failures', 0))
+                        statistics['errors'] += int(testsuite.get('errors', 0))
+                        statistics['skipped'] += int(testsuite.get('skipped', 0))
+                    
+            except Exception as e:
+                self.logger.warning(f"Failed to parse XML statistics from {xml_file}: {e}")
+        
+        self.logger.info(f"Parsed test statistics from XML: {statistics}")
+        return statistics
+    
     def _parse_test_failures(self, maven_result: MavenResult, project_dir: Path) -> List[TestFailure]:
-        """Parse test failures from Maven output."""
+        """Parse test failures from Maven output, prioritizing XML reports."""
         failures = []
+
+        self.logger.info(f"Parsing test failures from project: {project_dir}")
+
+        # Strategy 1: Try to read surefire XML reports first (most reliable)
+        xml_failures = self._parse_surefire_reports(project_dir)
+        if xml_failures:
+            self.logger.info(f"Successfully parsed {len(xml_failures)} failures from XML reports")
+            return xml_failures
+        
+        # Fallback strategies if XML reports are not available
         output = maven_result.stdout + "\n" + maven_result.stderr
+        self.logger.info(f"XML reports not available, falling back to text parsing")
         
-        # Try multiple parsing strategies
-        
-        # Strategy 1: Parse [ERROR] format from Maven output
+        # Strategy 2: Parse [ERROR] format from Maven output
         failures.extend(self._parse_maven_error_format(output))
         
-        # Strategy 2: Parse surefire report format
+        # Strategy 3: Parse surefire report format
         failures.extend(self._parse_surefire_format(output))
-        
-        # Strategy 3: Try to read surefire reports from filesystem
-        failures.extend(self._parse_surefire_reports(project_dir))
         
         self.logger.info(f"Parsed {len(failures)} test failures from Maven output")
         
@@ -283,7 +347,8 @@ class TestCorrectorAgent(BaseAgent):
         
         return unique_failures
     
-    def _parse_maven_error_format(self, output: str) -> List[TestFailure]:
+    @staticmethod
+    def _parse_maven_error_format(output: str) -> List[TestFailure]:
         """Parse failures from Maven [ERROR] format."""
         failures = []
         
@@ -315,7 +380,8 @@ class TestCorrectorAgent(BaseAgent):
         
         return failures
     
-    def _parse_surefire_format(self, output: str) -> List[TestFailure]:
+    @staticmethod
+    def _parse_surefire_format(output: str) -> List[TestFailure]:
         """Parse failures from surefire format."""
         failures = []
         
@@ -345,49 +411,127 @@ class TestCorrectorAgent(BaseAgent):
         return failures
     
     def _parse_surefire_reports(self, project_dir: Path) -> List[TestFailure]:
-        """Parse failures from surefire report files."""
+        """Parse failures from surefire XML report files."""
         failures = []
         
         surefire_dir = project_dir / "target" / "surefire-reports"
         if not surefire_dir.exists():
+            self.logger.warning(f"Surefire reports directory not found: {surefire_dir}")
             return failures
         
-        # Look for .txt report files
-        for report_file in surefire_dir.glob("*.txt"):
-            try:
-                content = report_file.read_text(encoding='utf-8')
-                failures.extend(self._parse_surefire_report_file(content, report_file.stem))
-            except Exception as e:
-                self.logger.warning(f"Failed to parse surefire report {report_file}: {e}")
+        self.logger.info(f"Parsing Surefire XML reports from: {surefire_dir}")
         
+        # Look for XML report files (TEST-*.xml)
+        xml_files = list(surefire_dir.glob("TEST-*.xml"))
+        if not xml_files:
+            self.logger.warning(f"No XML report files found in {surefire_dir}")
+            return failures
+        
+        for xml_file in xml_files:
+            try:
+                self.logger.info(f"Parsing XML report: {xml_file}")
+                xml_failures = self._parse_surefire_xml_file(xml_file)
+                failures.extend(xml_failures)
+                self.logger.info(f"Found {len(xml_failures)} failures in {xml_file}")
+            except Exception as e:
+                self.logger.error(f"Failed to parse XML report {xml_file}: {e}")
+        
+        self.logger.info(f"Total failures parsed from XML reports: {len(failures)}")
         return failures
     
-    def _parse_surefire_report_file(self, content: str, class_name: str) -> List[TestFailure]:
-        """Parse a single surefire report file."""
+    def _parse_surefire_xml_file(self, xml_file: Path) -> List[TestFailure]:
+        """Parse a single Surefire XML report file."""
+        import xml.etree.ElementTree as ET
+        
         failures = []
         
-        # Pattern for test failures in surefire reports
-        failure_pattern = r'(\w+)\(([^)]+)\)\s+Time elapsed:\s+[\d.]+\s+sec\s+<<<\s+(FAILURE|ERROR)!(.*?)(?=\n\w+\(|\nTests run:|\n$|\Z)'
-        
-        for match in re.finditer(failure_pattern, content, re.DOTALL):
-            test_method = match.group(1)
-            test_class = match.group(2) or class_name
-            failure_type = match.group(3)
-            failure_details = match.group(4).strip()
+        try:
+            tree = ET.parse(xml_file)
+            root = tree.getroot()
             
-            # Extract message and stack trace
-            lines = failure_details.split('\n')
-            message = lines[0] if lines else "Unknown failure"
-            stack_trace = '\n'.join(lines[1:]) if len(lines) > 1 else ""
+            # Handle both testsuite and testsuites root elements
+            if root.tag == 'testsuite':
+                testsuites = [root]
+            elif root.tag == 'testsuites':
+                testsuites = root.findall('testsuite')
+            else:
+                self.logger.warning(f"Unknown root element in {xml_file}: {root.tag}")
+                return failures
             
-            failures.append(TestFailure(
-                test_class=test_class,
-                test_method=test_method,
-                failure_type=failure_type,
-                message=message,
-                stack_trace=stack_trace,
-                full_output=match.group(0)
-            ))
+            for testsuite in testsuites:
+                for testcase in testsuite.findall('testcase'):
+                    test_name = testcase.get('name', '')
+                    test_class = testcase.get('classname', '')
+                    test_time = float(testcase.get('time', 0))
+                    
+                    # Check for failure
+                    failure_elem = testcase.find('failure')
+                    if failure_elem is not None:
+                        failure_message = failure_elem.get('message', '')
+                        failure_type = failure_elem.get('type', 'FAILURE')
+                        failure_content = failure_elem.text or ''
+                        
+                        # Get system output if available
+                        system_out_elem = testcase.find('system-out')
+                        system_out = system_out_elem.text if system_out_elem is not None else ''
+                        
+                        system_err_elem = testcase.find('system-err')
+                        system_err = system_err_elem.text if system_err_elem is not None else ''
+                        
+                        # Clean up message if it contains newlines
+                        message = failure_message
+                        stack_trace = failure_content
+                        if '\n' in failure_message:
+                            lines = failure_message.split('\n')
+                            message = lines[0]
+                            if not stack_trace:
+                                stack_trace = '\n'.join(lines[1:])
+                        
+                        failures.append(TestFailure(
+                            test_class=test_class,
+                            test_method=test_name,
+                            failure_type=failure_type,
+                            message=message,
+                            stack_trace=stack_trace,
+                            full_output=f"{failure_message}\n{failure_content}\nSystem Out: {system_out}\nSystem Err: {system_err}"
+                        ))
+                    
+                    # Check for error
+                    error_elem = testcase.find('error')
+                    if error_elem is not None:
+                        error_message = error_elem.get('message', '')
+                        error_type = error_elem.get('type', 'ERROR')
+                        error_content = error_elem.text or ''
+                        
+                        # Get system output if available
+                        system_out_elem = testcase.find('system-out')
+                        system_out = system_out_elem.text if system_out_elem is not None else ''
+                        
+                        system_err_elem = testcase.find('system-err')
+                        system_err = system_err_elem.text if system_err_elem is not None else ''
+                        
+                        # Clean up message if it contains newlines
+                        message = error_message
+                        stack_trace = error_content
+                        if '\n' in error_message:
+                            lines = error_message.split('\n')
+                            message = lines[0]
+                            if not stack_trace:
+                                stack_trace = '\n'.join(lines[1:])
+                        
+                        failures.append(TestFailure(
+                            test_class=test_class,
+                            test_method=test_name,
+                            failure_type=error_type,
+                            message=message,
+                            stack_trace=stack_trace,
+                            full_output=f"{error_message}\n{error_content}\nSystem Out: {system_out}\nSystem Err: {system_err}"
+                        ))
+                        
+        except ET.ParseError as e:
+            self.logger.error(f"XML parsing error in {xml_file}: {e}")
+        except Exception as e:
+            self.logger.error(f"Unexpected error parsing {xml_file}: {e}")
         
         return failures
     
@@ -497,7 +641,8 @@ class TestCorrectorAgent(BaseAgent):
         
         return failures_by_file
     
-    def _find_test_file_for_class(self, test_class: str, generated_files: List[Path]) -> Optional[Path]:
+    @staticmethod
+    def _find_test_file_for_class(test_class: str, generated_files: List[Path]) -> Optional[Path]:
         """Find the file containing a specific test class."""
         class_name = test_class.split('.')[-1]  # Get just the class name
         
@@ -557,9 +702,11 @@ class TestCorrectorAgent(BaseAgent):
             
             # Apply corrections if any were made
             if corrected_content and corrected_content != original_content:
-                # Backup original file
-                backup_path = file_path.with_suffix(f"{file_path.suffix}.backup")
-                backup_path.write_text(original_content, encoding='utf-8')
+                # Create versioned backup of original file
+                version_info = self.version_manager.create_version(
+                    file_path, original_content, "llm_correction"
+                )
+                self.logger.info(f"Created version {version_info['version']} backup: {version_info['version_file']}")
                 
                 # Write corrected content
                 file_path.write_text(corrected_content, encoding='utf-8')
@@ -693,7 +840,8 @@ class TestCorrectorAgent(BaseAgent):
         
         return result
     
-    def _is_timeout_failure(self, failure: TestFailure) -> bool:
+    @staticmethod
+    def _is_timeout_failure(failure: TestFailure) -> bool:
         """Check if failure is due to timeout."""
         timeout_indicators = ['timeout', 'timed out', 'connection timeout', 'read timeout']
         message_lower = failure.message.lower()
@@ -844,9 +992,11 @@ class TestCorrectorAgent(BaseAgent):
                 
                 # Write the modified content back to file
                 if modified_content != content:
-                    # Create backup
-                    backup_path = file_path.with_suffix(f"{file_path.suffix}.backup")
-                    file_path.rename(backup_path)
+                    # Create versioned backup
+                    version_info = self.version_manager.create_version(
+                        file_path, content, "ignore_annotation"
+                    )
+                    self.logger.info(f"Created version {version_info['version']} backup: {version_info['version_file']}")
                     
                     # Write modified content
                     file_path.write_text(modified_content, encoding='utf-8')

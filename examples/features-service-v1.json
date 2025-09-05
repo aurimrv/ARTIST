@@ -1,0 +1,865 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Features Service API",
+    "description": "API for managing products, features, configurations, and constraints with proper dependency ordering",
+    "version": "1.0"
+  },
+  "host": "localhost:8080",
+  "basePath": "/",
+  "schemes": [
+    "http"
+  ],
+  "paths": {
+    "/products": {
+      "get": {
+        "tags": ["Level 1 - Foundation"],
+        "operationId": "getAllProducts",
+        "summary": "Get all products",
+        "description": "Retrieve all products in the system. No dependencies required.",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "List of all products",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "examples": {
+              "application/json": ["smartphone", "laptop", "tablet"]
+            }
+          }
+        }
+      }
+    },
+    "/products/{productName}": {
+      "post": {
+        "tags": ["Level 1 - Foundation"],
+        "operationId": "addProduct",
+        "summary": "Create a new product",
+        "description": "Create a new product. This is a foundational operation with no dependencies.",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "productName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the product to create",
+            "example": "smartphone"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Product created successfully"
+          },
+          "409": {
+            "description": "Product already exists"
+          }
+        }
+      },
+      "get": {
+        "tags": ["Level 2 - Product Dependent"],
+        "operationId": "getProductByName",
+        "summary": "Get product details",
+        "description": "Retrieve detailed information about a specific product. Requires the product to exist.",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "productName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the product",
+            "example": "smartphone"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Product details retrieved successfully",
+            "schema": {
+              "$ref": "#/definitions/Product"
+            }
+          },
+          "404": {
+            "description": "Product not found"
+          }
+        }
+      },
+      "delete": {
+        "tags": ["Level 5 - Cleanup Operations"],
+        "operationId": "deleteProductByName",
+        "summary": "Delete a product",
+        "description": "Delete a product and all its associated data. This will cascade delete all features, configurations, and constraints.",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "productName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the product to delete",
+            "example": "smartphone"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Product deleted successfully"
+          },
+          "404": {
+            "description": "Product not found"
+          }
+        }
+      }
+    },
+    "/products/{productName}/features": {
+      "get": {
+        "tags": ["Level 2 - Product Dependent"],
+        "operationId": "getFeaturesForProduct",
+        "summary": "Get all features for a product",
+        "description": "Retrieve all features associated with a product. Requires the product to exist.",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "productName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the product",
+            "example": "smartphone"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of features for the product",
+            "schema": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/definitions/Feature"
+              }
+            }
+          },
+          "404": {
+            "description": "Product not found"
+          }
+        }
+      }
+    },
+    "/products/{productName}/features/{featureName}": {
+      "post": {
+        "tags": ["Level 2 - Product Dependent"],
+        "operationId": "addFeatureToProduct",
+        "summary": "Add a feature to a product",
+        "description": "Create a new feature for a product. Requires the product to exist.",
+        "consumes": [
+          "application/x-www-form-urlencoded"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "productName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the product",
+            "example": "smartphone"
+          },
+          {
+            "name": "featureName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the feature to create",
+            "example": "camera"
+          },
+          {
+            "name": "description",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "description": "Description of the feature",
+            "example": "High-resolution camera with optical zoom"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Feature created successfully",
+            "schema": {
+              "$ref": "#/definitions/Feature"
+            }
+          },
+          "404": {
+            "description": "Product not found"
+          },
+          "409": {
+            "description": "Feature already exists"
+          }
+        }
+      },
+      "put": {
+        "tags": ["Level 3 - Feature Dependent"],
+        "operationId": "updateFeatureOfProduct",
+        "summary": "Update a product feature",
+        "description": "Update an existing feature of a product. Requires both product and feature to exist.",
+        "consumes": [
+          "application/x-www-form-urlencoded"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "productName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the product",
+            "example": "smartphone"
+          },
+          {
+            "name": "featureName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the feature to update",
+            "example": "camera"
+          },
+          {
+            "name": "description",
+            "in": "formData",
+            "required": false,
+            "type": "string",
+            "description": "Updated description of the feature",
+            "example": "Ultra high-resolution camera with 10x optical zoom"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Feature updated successfully",
+            "schema": {
+              "$ref": "#/definitions/Feature"
+            }
+          },
+          "404": {
+            "description": "Product or feature not found"
+          }
+        }
+      },
+      "delete": {
+        "tags": ["Level 5 - Cleanup Operations"],
+        "operationId": "deleteFeatureOfProduct",
+        "summary": "Delete a product feature",
+        "description": "Delete a feature from a product. This will also remove the feature from all configurations and related constraints.",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "productName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the product",
+            "example": "smartphone"
+          },
+          {
+            "name": "featureName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the feature to delete",
+            "example": "camera"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Feature deleted successfully"
+          },
+          "404": {
+            "description": "Product or feature not found"
+          }
+        }
+      }
+    },
+    "/products/{productName}/configurations": {
+      "get": {
+        "tags": ["Level 2 - Product Dependent"],
+        "operationId": "getConfigurationsForProduct",
+        "summary": "Get all configurations for a product",
+        "description": "Retrieve all configurations for a product. Requires the product to exist.",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "productName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the product",
+            "example": "smartphone"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of configuration names for the product",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "examples": {
+              "application/json": ["basic", "premium", "pro"]
+            }
+          },
+          "404": {
+            "description": "Product not found"
+          }
+        }
+      }
+    },
+    "/products/{productName}/configurations/{configurationName}": {
+      "post": {
+        "tags": ["Level 2 - Product Dependent"],
+        "operationId": "addConfiguration",
+        "summary": "Create a new configuration",
+        "description": "Create a new configuration for a product. Requires the product to exist.",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "productName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the product",
+            "example": "smartphone"
+          },
+          {
+            "name": "configurationName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the configuration to create",
+            "example": "premium"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Configuration created successfully"
+          },
+          "404": {
+            "description": "Product not found"
+          },
+          "409": {
+            "description": "Configuration already exists"
+          }
+        }
+      },
+      "get": {
+        "tags": ["Level 3 - Feature Dependent"],
+        "operationId": "getConfigurationWithNameForProduct",
+        "summary": "Get configuration details",
+        "description": "Retrieve detailed information about a specific configuration. Requires product and configuration to exist.",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "productName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the product",
+            "example": "smartphone"
+          },
+          {
+            "name": "configurationName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the configuration",
+            "example": "premium"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Configuration details retrieved successfully",
+            "schema": {
+              "$ref": "#/definitions/ProductConfiguration"
+            }
+          },
+          "404": {
+            "description": "Product or configuration not found"
+          }
+        }
+      },
+      "delete": {
+        "tags": ["Level 5 - Cleanup Operations"],
+        "operationId": "deleteConfiguration",
+        "summary": "Delete a configuration",
+        "description": "Delete a configuration from a product. This will remove all feature associations for this configuration.",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "productName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the product",
+            "example": "smartphone"
+          },
+          {
+            "name": "configurationName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the configuration to delete",
+            "example": "premium"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Configuration deleted successfully"
+          },
+          "404": {
+            "description": "Product or configuration not found"
+          }
+        }
+      }
+    },
+    "/products/{productName}/configurations/{configurationName}/features": {
+      "get": {
+        "tags": ["Level 3 - Feature Dependent"],
+        "operationId": "getConfigurationActiveFeatures",
+        "summary": "Get active features for a configuration",
+        "description": "Retrieve all active features for a specific configuration. Requires product and configuration to exist.",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "productName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the product",
+            "example": "smartphone"
+          },
+          {
+            "name": "configurationName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the configuration",
+            "example": "premium"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of active feature names for the configuration",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "examples": {
+              "application/json": ["camera", "display", "processor"]
+            }
+          },
+          "404": {
+            "description": "Product or configuration not found"
+          }
+        }
+      }
+    },
+    "/products/{productName}/configurations/{configurationName}/features/{featureName}": {
+      "post": {
+        "tags": ["Level 3 - Feature Dependent"],
+        "operationId": "addFeatureToConfiguration",
+        "summary": "Add feature to configuration",
+        "description": "Activate a feature in a specific configuration. Requires product, configuration, and feature to exist.",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "productName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the product",
+            "example": "smartphone"
+          },
+          {
+            "name": "configurationName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the configuration",
+            "example": "premium"
+          },
+          {
+            "name": "featureName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the feature to activate",
+            "example": "camera"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Feature added to configuration successfully"
+          },
+          "404": {
+            "description": "Product, configuration, or feature not found"
+          },
+          "409": {
+            "description": "Feature already active in configuration"
+          }
+        }
+      },
+      "delete": {
+        "tags": ["Level 5 - Cleanup Operations"],
+        "operationId": "removeFeatureFromConfiguration",
+        "summary": "Remove feature from configuration",
+        "description": "Deactivate a feature from a specific configuration.",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "productName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the product",
+            "example": "smartphone"
+          },
+          {
+            "name": "configurationName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the configuration",
+            "example": "premium"
+          },
+          {
+            "name": "featureName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the feature to deactivate",
+            "example": "camera"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Feature removed from configuration successfully"
+          },
+          "404": {
+            "description": "Product, configuration, or feature not found"
+          }
+        }
+      }
+    },
+    "/products/{productName}/constraints/requires": {
+      "post": {
+        "tags": ["Level 4 - Constraint Resources"],
+        "operationId": "addRequiresConstraintToProduct",
+        "summary": "Add requires constraint",
+        "description": "Create a requires constraint between two features. When sourceFeature is selected, requiredFeature must also be selected. Requires both features to exist in the product.",
+        "consumes": [
+          "application/x-www-form-urlencoded"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "productName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the product",
+            "example": "smartphone"
+          },
+          {
+            "name": "sourceFeature",
+            "in": "formData",
+            "required": true,
+            "type": "string",
+            "description": "The feature that requires another feature",
+            "example": "advanced-camera"
+          },
+          {
+            "name": "requiredFeature",
+            "in": "formData",
+            "required": true,
+            "type": "string",
+            "description": "The feature that is required",
+            "example": "high-resolution-display"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Requires constraint created successfully",
+            "schema": {
+              "$ref": "#/definitions/FeatureConstraint"
+            }
+          },
+          "404": {
+            "description": "Product or one of the features not found"
+          },
+          "409": {
+            "description": "Constraint already exists"
+          }
+        }
+      }
+    },
+    "/products/{productName}/constraints/excludes": {
+      "post": {
+        "tags": ["Level 4 - Constraint Resources"],
+        "operationId": "addExcludesConstraintToProduct",
+        "summary": "Add excludes constraint",
+        "description": "Create an excludes constraint between two features. When sourceFeature is selected, excludedFeature cannot be selected. Requires both features to exist in the product.",
+        "consumes": [
+          "application/x-www-form-urlencoded"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "productName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the product",
+            "example": "smartphone"
+          },
+          {
+            "name": "sourceFeature",
+            "in": "formData",
+            "required": true,
+            "type": "string",
+            "description": "The feature that excludes another feature",
+            "example": "budget-processor"
+          },
+          {
+            "name": "excludedFeature",
+            "in": "formData",
+            "required": true,
+            "type": "string",
+            "description": "The feature that cannot be selected",
+            "example": "gaming-gpu"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Excludes constraint created successfully",
+            "schema": {
+              "$ref": "#/definitions/FeatureConstraint"
+            }
+          },
+          "404": {
+            "description": "Product or one of the features not found"
+          },
+          "409": {
+            "description": "Constraint already exists"
+          }
+        }
+      }
+    },
+    "/products/{productName}/constraints/{constraintId}": {
+      "delete": {
+        "tags": ["Level 5 - Cleanup Operations"],
+        "operationId": "deleteConstraint",
+        "summary": "Delete a constraint",
+        "description": "Delete a specific constraint by its ID.",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "productName",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "description": "Name of the product",
+            "example": "smartphone"
+          },
+          {
+            "name": "constraintId",
+            "in": "path",
+            "required": true,
+            "type": "integer",
+            "format": "int64",
+            "description": "ID of the constraint to delete",
+            "example": 123
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Constraint deleted successfully"
+          },
+          "404": {
+            "description": "Product or constraint not found"
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "Feature": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64",
+          "description": "Unique identifier for the feature"
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of the feature",
+          "example": "camera"
+        },
+        "description": {
+          "type": "string",
+          "description": "Description of the feature",
+          "example": "High-resolution camera with optical zoom"
+        }
+      }
+    },
+    "ProductConfiguration": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name of the configuration",
+          "example": "premium"
+        },
+        "valid": {
+          "type": "boolean",
+          "description": "Whether the configuration is valid according to all constraints",
+          "example": true
+        },
+        "activeFeatures": {
+          "type": "array",
+          "description": "List of features active in this configuration",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/definitions/Feature"
+          }
+        }
+      }
+    },
+    "FeatureConstraint": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64",
+          "description": "Unique identifier for the constraint"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["requires", "excludes"],
+          "description": "Type of constraint",
+          "example": "requires"
+        },
+        "sourceFeature": {
+          "type": "string",
+          "description": "The feature that has the constraint",
+          "example": "advanced-camera"
+        },
+        "targetFeature": {
+          "type": "string",
+          "description": "The feature affected by the constraint",
+          "example": "high-resolution-display"
+        }
+      }
+    },
+    "Product": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64",
+          "description": "Unique identifier for the product"
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of the product",
+          "example": "smartphone"
+        },
+        "features": {
+          "type": "array",
+          "description": "List of all features available for this product",
+          "readOnly": true,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/definitions/Feature"
+          }
+        },
+        "constraints": {
+          "type": "array",
+          "description": "List of all constraints defined for this product",
+          "readOnly": true,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/definitions/FeatureConstraint"
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Level 1 - Foundation",
+      "description": "Operations with no dependencies - can be called independently"
+    },
+    {
+      "name": "Level 2 - Product Dependent",
+      "description": "Operations that require a product to exist first"
+    },
+    {
+      "name": "Level 3 - Feature Dependent",
+      "description": "Operations that require both product and features/configurations to exist"
+    },
+    {
+      "name": "Level 4 - Constraint Resources",
+      "description": "Operations that define relationships between features"
+    },
+    {
+      "name": "Level 5 - Cleanup Operations",
+      "description": "Delete operations that can be called at any level but typically come last"
+    }
+  ]
+}

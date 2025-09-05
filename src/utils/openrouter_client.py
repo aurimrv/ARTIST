@@ -2,9 +2,7 @@
 OpenRouter API client for the API Test Generator System.
 """
 
-import json
-import time
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional
 import requests
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -250,6 +248,7 @@ Please generate test scenarios that include:
 3. Edge cases and boundary conditions
 4. Parameter validation tests
 5. Response format validation
+6. Assume API database is empty. Create a setup method populating the database using POST method with all parameters used during test.
 
 Format the output as a structured JSON with the following schema:
 {{
@@ -316,6 +315,7 @@ Requirements:
 6. Follow Java naming conventions
 7. Include necessary imports
 8. Make tests independent and repeatable
+9. Assume API database is empty. Create a setup method populating the database using POST method with all parameters used during test
 
 CRITICAL: Return ONLY the complete Java class code. Do NOT include any explanations, descriptions, or markdown code blocks. Start directly with the package declaration or imports."""
         
@@ -402,7 +402,7 @@ Test Failures:
 {failures}
 
 CRITICAL: Return ONLY the corrected Java test code that resolves the test failures. Do NOT include any explanations, descriptions, or markdown code blocks. If a test cannot be fixed reliably, add @Ignore annotation with a clear reason."""
-        
+
         return await self.generate_text(
             prompt=prompt,
             model=model,
