@@ -757,11 +757,11 @@ class PlannerAgent(BaseAgent):
         scenarios = []
         
         # Generate workflow-based scenarios first (these are dependency-aware)
-        workflows = dependency_analysis.get('workflows', [])
-        if workflows:
-            workflow_scenarios = self.dependency_analyzer.generate_workflow_scenarios(workflows)
-            scenarios.extend(workflow_scenarios)
-            self.logger.info(f"Generated {len(workflow_scenarios)} workflow-based scenarios")
+        #workflows = dependency_analysis.get('workflows', [])
+        #if workflows:
+        #    workflow_scenarios = self.dependency_analyzer.generate_workflow_scenarios(workflows)
+        #    scenarios.extend(workflow_scenarios)
+        #    self.logger.info(f"Generated {len(workflow_scenarios)} workflow-based scenarios")
         
         # Generate scenarios from OpenAPI specification with parameter examples
         spec_scenarios = await self._generate_scenarios_from_openapi_with_examples(api_spec, base_url)

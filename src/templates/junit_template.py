@@ -2,6 +2,7 @@
 JUnit 4 template for generating test code.
 """
 
+import json
 from typing import Dict, List, Any
 from jinja2 import Template
 
@@ -200,7 +201,11 @@ public class {{ class_name }} {
         # Add request body if needed
         if scenario.method.upper() in ['POST', 'PUT', 'PATCH'] and scenario.test_data:
             body_json = self._format_json_body(scenario.test_data)
-            request_parts.append(f'            .body({body_json})')
+            #### Convert dictionary to compact JSON string (no newlines, no extra spaces) ####
+            parsed = body_json.replace('\n', '')
+            data = json.loads(parsed)
+            json_str = json.dumps(data, separators=(", ", ": "))
+            request_parts.append(f'            .body({json_str})')
         
         # Add the HTTP method and endpoint
         endpoint = self._resolve_endpoint_path(scenario.endpoint, path_params)

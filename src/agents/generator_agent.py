@@ -85,6 +85,9 @@ class GeneratorAgent(BaseAgent):
             self.log_progress("Generating test classes", 2, 4)
             generated_files = await self._generate_test_classes(context, scenarios)
 
+            ####
+            exit(1)
+
             # Step 3: Enhance with LLM if available
             if self.openrouter_client and generated_files:
                 self.log_progress("Enhancing tests with LLM", 3, 4)
@@ -362,7 +365,8 @@ Requirements:
 - Use Rest Assured for HTTP requests
 - Java 8 compatibility
 - Separate methods for positive and negative tests
-- Proper error handling and assertions"""
+- Proper error handling and assertions
+- It is crucial to maintain the exact number of test methods (scenarios) already present in the provided test file. Do no add or remove any test methods."""
     
     def _is_valid_java_code(self, code: str) -> bool:
         """
