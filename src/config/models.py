@@ -105,9 +105,6 @@ class TestScenario:
     expected_response_schema: Optional[Dict[str, Any]] = None
     is_negative_test: bool = False
     test_data: Optional[Dict[str, Any]] = None
-    workflow_step: Optional[int] = None
-    workflow_name: Optional[str] = None
-    depends_on_previous_step: bool = False
 
 
 @dataclass

@@ -26,3 +26,13 @@ USE_COVERGE_INFORMATION=true
 Cada agente poderia receber de entrada as informações em algum formato e produzir sua saída em algum formato para ser consumido para outro agente.
 
 Isso permitiria realizar o processamento passo a passo. Agente por agente. Ou até mesmo ter agentes diferentes consumindo a saída de um agente inicial.
+
+## Code with exit worflows commented
+
+## Parametrizar geração dos testes
+
+framework_api
+java_version
+junit_version 
+
+Podem ser fornecidos via .env

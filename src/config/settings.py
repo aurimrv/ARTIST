@@ -5,7 +5,7 @@ Settings loader and validator for the API Test Generator System.
 import os
 from pathlib import Path
 from typing import Optional, Dict
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values
 
 from .models import (
     SystemConfig, OpenRouterConfig, MavenConfig, 
@@ -18,43 +18,76 @@ class Settings:
     
     def __init__(self, env_file: Optional[Path] = None):
         """Initialize settings from environment file."""
+        self.env_vars = {}
+        
+        # Load environment variables from .env file
         if env_file and env_file.exists():
             load_dotenv(env_file)
+            self.env_vars = dotenv_values(env_file)
         elif Path('.env').exists():
             load_dotenv('.env')
+            self.env_vars = dotenv_values('.env')
+        
+        # Merge with system environment variables
+        self.env_vars.update(os.environ)
         
         self._config = self._load_config()
+    
+    def _get_env(self, key: str, default: str = None) -> str:
+        """Get environment variable with fallback to default."""
+        return self.env_vars.get(key, default)
+    
+    def _get_env_int(self, key: str, default: int) -> int:
+        """Get environment variable as integer with fallback to default."""
+        value = self._get_env(key, str(default))
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return default
+    
+    def _get_env_float(self, key: str, default: float) -> float:
+        """Get environment variable as float with fallback to default."""
+        value = self._get_env(key, str(default))
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return default
+    
+    def _get_env_bool(self, key: str, default: bool) -> bool:
+        """Get environment variable as boolean with fallback to default."""
+        value = self._get_env(key, str(default).lower())
+        return value.lower() in ('true', '1', 'yes', 'on')
     
     def _load_config(self) -> SystemConfig:
         """Load configuration from environment variables."""
         # OpenRouter configuration
         openrouter = OpenRouterConfig(
-            api_key=os.getenv('OPENROUTER_API_KEY'),
-            api_base=os.getenv('OPENROUTER_API_BASE', 'https://openrouter.ai/api/v1'),
-            default_model=os.getenv('OPENROUTER_DEFAULT_MODEL', 'openai/gpt-4o-mini'),
-            rate_limit_requests_per_minute=int(os.getenv('RATE_LIMIT_REQUESTS_PER_MINUTE', '60')),
-            rate_limit_tokens_per_minute=int(os.getenv('RATE_LIMIT_TOKENS_PER_MINUTE', '100000')),
-            retry_attempts=int(os.getenv('RETRY_ATTEMPTS', '3')),
-            retry_delay=float(os.getenv('RETRY_DELAY', '2.0')),
-            backoff_factor=float(os.getenv('BACKOFF_FACTOR', '3.0'))
+            api_key=self._get_env('OPENROUTER_API_KEY'),
+            api_base=self._get_env('OPENROUTER_API_BASE', 'https://openrouter.ai/api/v1'),
+            default_model=self._get_env('OPENROUTER_DEFAULT_MODEL', 'openai/gpt-4o-mini'),
+            rate_limit_requests_per_minute=self._get_env_int('RATE_LIMIT_REQUESTS_PER_MINUTE', 60),
+            rate_limit_tokens_per_minute=self._get_env_int('RATE_LIMIT_TOKENS_PER_MINUTE', 100000),
+            retry_attempts=self._get_env_int('RETRY_ATTEMPTS', 3),
+            retry_delay=self._get_env_float('RETRY_DELAY', 2.0),
+            backoff_factor=self._get_env_float('BACKOFF_FACTOR', 3.0)
         )
         
         # Maven configuration
         maven = MavenConfig(
-            timeout=int(os.getenv('MAVEN_TIMEOUT', '300')),
-            memory=os.getenv('MAVEN_MEMORY', '2g'),
-            java_home=os.getenv('JAVA_HOME'),
-            maven_home=os.getenv('MAVEN_HOME')
+            timeout=self._get_env_int('MAVEN_TIMEOUT', 300),
+            memory=self._get_env('MAVEN_MEMORY', '2g'),
+            java_home=self._get_env('JAVA_HOME'),
+            maven_home=self._get_env('MAVEN_HOME')
         )
         
         # Test generation configuration
         test_generation = TestGenerationConfig(
-            default_timeout=int(os.getenv('DEFAULT_TIMEOUT', '30')),
-            generate_negative_tests=os.getenv('GENERATE_NEGATIVE_TESTS', 'true').lower() == 'true',
-            include_performance_tests=os.getenv('INCLUDE_PERFORMANCE_TESTS', 'false').lower() == 'true',
-            max_generation_attempts=int(os.getenv('MAX_GENERATION_ATTEMPTS', '5')),
-            max_compile_correction_attempts=int(os.getenv('MAX_COMPILE_CORRECTION_ATTEMPTS', '2')),
-            max_test_correction_attempts=int(os.getenv('MAX_TEST_CORRECTION_ATTEMPTS', '3'))
+            default_timeout=self._get_env_int('DEFAULT_TIMEOUT', 30),
+            generate_negative_tests=self._get_env_bool('GENERATE_NEGATIVE_TESTS', True),
+            include_performance_tests=self._get_env_bool('INCLUDE_PERFORMANCE_TESTS', False),
+            max_generation_attempts=self._get_env_int('MAX_GENERATION_ATTEMPTS', 5),
+            max_compile_correction_attempts=self._get_env_int('MAX_COMPILE_CORRECTION_ATTEMPTS', 2),
+            max_test_correction_attempts=self._get_env_int('MAX_TEST_CORRECTION_ATTEMPTS', 3)
         )
         
         # Agent configurations
@@ -65,8 +98,8 @@ class Settings:
             maven=maven,
             test_generation=test_generation,
             agents=agents,
-            java_validation_enabled=os.getenv('JAVA_VALIDATION_ENABLED', 'true').lower() == 'true',
-            log_level=os.getenv('LOG_LEVEL', 'INFO')
+            java_validation_enabled=self._get_env_bool('JAVA_VALIDATION_ENABLED', True),
+            log_level=self._get_env('LOG_LEVEL', 'INFO')
         )
     
     def _load_agent_configs(self, default_model: str) -> Dict[str, AgentConfig]:
@@ -77,14 +110,14 @@ class Settings:
         
         for agent_name in agent_names:
             model_key = f'{agent_name.upper()}_MODEL'
-            model = os.getenv(model_key, default_model)
+            model = self._get_env(model_key, default_model)
             
             agents[agent_name] = AgentConfig(
                 name=agent_name,
                 model=model,
-                max_tokens=int(os.getenv(f'{agent_name.upper()}_MAX_TOKENS', '16000')),
-                temperature=float(os.getenv(f'{agent_name.upper()}_TEMPERATURE', '0.1')),
-                timeout=int(os.getenv(f'{agent_name.upper()}_TIMEOUT', '60'))
+                max_tokens=self._get_env_int(f'{agent_name.upper()}_MAX_TOKENS', 16000),
+                temperature=self._get_env_float(f'{agent_name.upper()}_TEMPERATURE', 0.1),
+                timeout=self._get_env_int(f'{agent_name.upper()}_TIMEOUT', 60)
             )
         
         return agents

@@ -165,12 +165,6 @@
         "operationId": "addFeatureToProduct",
         "summary": "Add a feature to a product",
         "description": "Create a new feature for a product. Requires the product to exist.",
-        "consumes": [
-          "application/x-www-form-urlencoded"
-        ],
-        "produces": [
-          "application/json"
-        ],
         "parameters": [
           {
             "name": "productName",
@@ -188,14 +182,6 @@
             "description": "Name of the feature to create",
             "example": "camera"
           },
-          {
-            "name": "description",
-            "in": "formData",
-            "required": false,
-            "type": "string",
-            "description": "Description of the feature",
-            "example": "High-resolution camera with optical zoom"
-          }
         ],
         "responses": {
           "201": {

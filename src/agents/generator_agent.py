@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from .base_agent import BaseAgent
 from ..config.models import AgentConfig, SystemConfig, TestScenario, ProjectContext
-from ..templates import JUnitTemplate, MavenProjectTemplate, RestAssuredTemplate
+from ..templates import MavenProjectTemplate
 from ..utils import OpenRouterClient, CodeSanitizer
 
 
@@ -24,9 +24,7 @@ class GeneratorAgent(BaseAgent):
     def __init__(self, config: AgentConfig, system_config: SystemConfig):
         """Initialize the Generator Agent."""
         super().__init__(config, system_config)
-        self.junit_template = JUnitTemplate()
-        self.maven_template = MavenProjectTemplate()
-        self.rest_assured_template = RestAssuredTemplate()
+        self.maven_template = MavenProjectTemplate()  # Still needed for project structure
         self.code_sanitizer = CodeSanitizer()
         self.openrouter_client = None
     
@@ -71,7 +69,7 @@ class GeneratorAgent(BaseAgent):
             self.log_progress(f"Starting test code generation for {len(scenarios)} scenarios")
             
             # Step 1: Create Maven project structure
-            self.log_progress("Creating Maven project structure", 1, 4)
+            self.log_progress("Creating Maven project structure", 1, 3)
             project_dir = await self._create_maven_project(context)
             
             if not project_dir:
@@ -81,26 +79,25 @@ class GeneratorAgent(BaseAgent):
                     'generated_files': []
                 }
             
-            # Step 2: Generate test classes
-            self.log_progress("Generating test classes", 2, 4)
-            generated_files = await self._generate_test_classes(context, scenarios)
+            # Step 2: Generate test classes directly with LLM
+            self.log_progress("Generating test classes with LLM", 2, 3)
+            generated_files = await self._generate_test_classes_with_llm(context, scenarios)
 
-            ####
-            exit(1)
-
-            # Step 3: Enhance with LLM if available
-            if self.openrouter_client and generated_files:
-                self.log_progress("Enhancing tests with LLM", 3, 4)
-                enhanced_files = await self._enhance_tests_with_llm(context, generated_files)
-                if enhanced_files:
-                    generated_files = enhanced_files
+            if not generated_files:
+                return {
+                    'success': False,
+                    'error': "Failed to generate test classes with LLM",
+                    'generated_files': []
+                }
             
-            # Step 4: Validate generated code
-            self.log_progress("Validating generated code", 4, 4)
+            # Step 3: Validate generated code
+            self.log_progress("Validating generated code", 3, 3)
             validation_result = await self._validate_generated_code(project_dir, generated_files)
             
             self.logger.info(f"Generated {len(generated_files)} test files")
-            
+
+            ####
+            exit(1)
             return {
                 'success': True,
                 'message': f"Successfully generated {len(generated_files)} test files",
@@ -186,17 +183,17 @@ class GeneratorAgent(BaseAgent):
             self.log_error("Failed to create Maven project", e)
             return None
     
-    async def _generate_test_classes(
+    async def _generate_test_classes_with_llm(
         self, 
         context: ProjectContext, 
         scenarios: List[TestScenario]
     ) -> List[Path]:
         """
-        Generate test classes from scenarios.
+        Generate test classes directly using LLM from scenarios.
         
         Args:
             context: Project context
-            scenarios: List of test scenarios
+            scenarios: List of test scenarios from planner_agent
         
         Returns:
             List of generated file paths
@@ -204,14 +201,18 @@ class GeneratorAgent(BaseAgent):
         generated_files = []
         
         try:
+            if not self.openrouter_client:
+                self.logger.error("OpenRouter client not available - cannot generate tests with LLM")
+                return []
+            
             # Group scenarios by test class (for now, put all in main test class)
             test_classes = self._group_scenarios_by_class(scenarios, context)
             
             for class_name, class_scenarios in test_classes.items():
-                self.logger.info(f"Generating test class: {class_name}")
+                self.logger.info(f"Generating test class with LLM: {class_name}")
                 
-                # Generate test class content
-                test_content = await self._generate_single_test_class(
+                # Generate test class content directly with LLM
+                test_content = await self._generate_single_test_class_with_llm(
                     context, class_name, class_scenarios
                 )
                 
@@ -230,11 +231,13 @@ class GeneratorAgent(BaseAgent):
                     
                     generated_files.append(test_file_path)
                     self.logger.info(f"Generated test class: {test_file_path}")
+                else:
+                    self.logger.error(f"Failed to generate test class {class_name} with LLM")
             
             return generated_files
             
         except Exception as e:
-            self.log_error("Failed to generate test classes", e)
+            self.log_error("Failed to generate test classes with LLM", e)
             return []
     
     def _group_scenarios_by_class(
@@ -258,14 +261,14 @@ class GeneratorAgent(BaseAgent):
             context.main_test_class_name: scenarios
         }
     
-    async def _generate_single_test_class(
+    async def _generate_single_test_class_with_llm(
         self,
         context: ProjectContext,
         class_name: str,
         scenarios: List[TestScenario]
     ) -> Optional[str]:
         """
-        Generate a single test class.
+        Generate a single test class directly using LLM.
         
         Args:
             context: Project context
@@ -276,101 +279,248 @@ class GeneratorAgent(BaseAgent):
             Generated test class content or None if generation fails
         """
         try:
-            # API info for template
-            api_info = {
-                'title': 'API',
-                'version': '1.0.0'
-            }
+            # Prepare scenarios context for LLM
+            scenarios_context = self._format_scenarios_for_llm(scenarios)
             
-            # Generate test class using template
-            test_content = self.junit_template.generate_test_class(
-                context, scenarios, api_info
+            # Prepare project context for LLM
+            project_context_str = self._format_project_context_for_llm(context, class_name)
+            
+            # Include OpenAPI specification if available
+            openapi_context = self._format_openapi_context_for_llm(context)
+
+            self.logger.info(f"Generator MAX_TOKENS: {self.get_max_tokens()}")
+
+            # Combine all contexts for LLM
+            full_context = f"""{project_context_str}
+
+{openapi_context}
+
+{scenarios_context}"""
+
+            # Generate complete test class using LLM
+            test_content = await self.openrouter_client.generate_test_code(
+                scenarios=full_context,
+                project_context="",  # Already included in scenarios
+                model=self.get_model_name(),
+                max_tokens=self.get_max_tokens(),
+                temperature=self.get_temperature()
             )
+
+            # Sanitize LLM output to remove commentary and extract only code
+            if test_content:
+                self.logger.info(f"Sanitizing LLM output for {class_name}")
+                test_content = self.code_sanitizer.sanitize_java_code(test_content)
             
-            return test_content
+            # Validate generated content
+            if test_content and self._is_valid_java_code(test_content):
+                self.logger.info(f"Successfully generated test class {class_name} with LLM")
+                return test_content
+            else:
+                self.logger.error(f"LLM generated invalid Java code for {class_name}")
+                return None
             
         except Exception as e:
-            self.log_error(f"Failed to generate test class {class_name}", e)
+            self.log_error(f"Failed to generate test class {class_name} with LLM", e)
             return None
     
-    async def _enhance_tests_with_llm(
-        self,
-        context: ProjectContext,
-        generated_files: List[Path]
-    ) -> Optional[List[Path]]:
-        """
-        Enhance generated tests using LLM.
+    def _format_scenarios_for_llm(self, scenarios: List[TestScenario]) -> str:
+        """Format test scenarios for LLM consumption."""
+        scenarios_text = "Test Scenarios:\n\n"
         
-        Args:
-            context: Project context
-            generated_files: List of generated test files
+        for i, scenario in enumerate(scenarios, 1):
+            scenarios_text += f"Scenario {i}:\n"
+            scenarios_text += f"- Name: {scenario.name}\n"
+            scenarios_text += f"- Description: {scenario.description}\n"
+            scenarios_text += f"- Method: {scenario.method}\n"
+            scenarios_text += f"- Endpoint: {scenario.endpoint}\n"
+            scenarios_text += f"- Expected Status: {scenario.expected_status}\n"
+            scenarios_text += f"- Is Negative Test: {scenario.is_negative_test}\n"
+            
+            if scenario.parameters:
+                scenarios_text += f"- Parameters: {scenario.parameters}\n"
+            
+            if scenario.test_data:
+                scenarios_text += f"- Test Data: {scenario.test_data}\n"
+            
+            scenarios_text += "\n"
         
-        Returns:
-            List of enhanced file paths or None if enhancement fails
-        """
+        return scenarios_text
+
+    def _format_openapi_context_for_llm(self, context: ProjectContext) -> str:
+        """Format OpenAPI specification context for LLM consumption."""
         try:
-            enhanced_files = []
-            
-            for file_path in generated_files:
-                self.logger.info(f"Enhancing test file with LLM: {file_path}")
+            # Try to access OpenAPI specification from context
+            if hasattr(context, 'api_spec_path') and context.api_spec_path:
+                from pathlib import Path
+                import json
                 
-                # Read current content
-                current_content = file_path.read_text(encoding='utf-8')
-                
-                # Prepare context for LLM
-                project_context_str = self._format_project_context_for_llm(context)
-
-                self.logger.info(f"Generator MAX_TOKENS: {self.get_max_tokens()}")
-
-                # Generate enhanced code using LLM
-                enhanced_content = await self.openrouter_client.generate_test_code(
-                    scenarios=current_content,  # Use current content as scenarios
-                    project_context=project_context_str,
-                    model=self.get_model_name(),
-                    max_tokens=self.get_max_tokens(),
-                    temperature=self.get_temperature()
-                )
-
-
-                # Sanitize LLM output to remove commentary and extract only code
-                if enhanced_content:
-                    self.logger.info(f"Sanitizing LLM output for {file_path}")
-                    enhanced_content = self.code_sanitizer.sanitize_java_code(enhanced_content)
-                
-                # Validate and write enhanced content
-                if enhanced_content and self._is_valid_java_code(enhanced_content):
-                    file_path.write_text(enhanced_content, encoding='utf-8')
-                    enhanced_files.append(file_path)
-                    self.logger.info(f"Enhanced test file: {file_path}")
+                spec_path = Path(context.api_spec_path)
+                if spec_path.exists():
+                    with open(spec_path, 'r', encoding='utf-8') as f:
+                        api_spec = json.load(f)
+                    
+                    # Extract relevant information from OpenAPI spec
+                    openapi_context = "OpenAPI Specification Context:\n\n"
+                    
+                    # Basic API info
+                    if 'info' in api_spec:
+                        info = api_spec['info']
+                        openapi_context += f"API Title: {info.get('title', 'Unknown')}\n"
+                        openapi_context += f"API Version: {info.get('version', 'Unknown')}\n"
+                        if 'description' in info:
+                            openapi_context += f"API Description: {info['description']}\n"
+                    
+                    # Paths and operations
+                    if 'paths' in api_spec:
+                        openapi_context += "\nAPI Endpoints and Response Schemas:\n"
+                        for path, methods in api_spec['paths'].items():
+                            openapi_context += f"\nPath: {path}\n"
+                            for method, operation in methods.items():
+                                if isinstance(operation, dict):
+                                    openapi_context += f"  {method.upper()}:\n"
+                                    
+                                    # Parameters
+                                    if 'parameters' in operation:
+                                        openapi_context += "    Parameters:\n"
+                                        for param in operation['parameters']:
+                                            param_name = param.get('name', 'unknown')
+                                            param_type = param.get('type', param.get('schema', {}).get('type', 'unknown'))
+                                            param_required = param.get('required', False)
+                                            openapi_context += f"      - {param_name} ({param_type}) {'[required]' if param_required else '[optional]'}\n"
+                                    
+                                    # Responses
+                                    if 'responses' in operation:
+                                        openapi_context += "    Responses:\n"
+                                        for status_code, response in operation['responses'].items():
+                                            openapi_context += f"      {status_code}: {response.get('description', 'No description')}\n"
+                                            
+                                            # Response schema
+                                            if 'content' in response:
+                                                for content_type, content in response['content'].items():
+                                                    if 'schema' in content:
+                                                        schema = content['schema']
+                                                        openapi_context += f"        Content-Type: {content_type}\n"
+                                                        openapi_context += f"        Schema: {self._format_schema_info(schema)}\n"
+                    
+                    # Components/schemas
+                    if 'components' in api_spec and 'schemas' in api_spec['components']:
+                        openapi_context += "\nData Models:\n"
+                        for schema_name, schema in api_spec['components']['schemas'].items():
+                            openapi_context += f"  {schema_name}: {self._format_schema_info(schema)}\n"
+                    
+                    openapi_context += "\nIMPORTANT: Use this specification to understand the exact response structure and field names. Do NOT assume fields like 'id' exist unless specified in the schema.\n"
+                    
+                    return openapi_context
                 else:
-                    self.logger.warning(f"LLM enhancement failed for {file_path}, keeping original")
-                    enhanced_files.append(file_path)
-
-            return enhanced_files
+                    self.logger.warning(f"OpenAPI specification file not found: {spec_path}")
+            
+            return "OpenAPI Specification: Not available - use careful response validation in tests.\n"
             
         except Exception as e:
-            self.log_error("Failed to enhance tests with LLM", e)
-            return None
-    
-    def _format_project_context_for_llm(self, context: ProjectContext) -> str:
+            self.logger.warning(f"Failed to load OpenAPI specification: {e}")
+            return "OpenAPI Specification: Failed to load - use careful response validation in tests.\n"
+
+    def _format_schema_info(self, schema: dict) -> str:
+        """Format schema information for LLM context."""
+        if not isinstance(schema, dict):
+            return str(schema)
+        
+        schema_info = ""
+        
+        if 'type' in schema:
+            schema_info += f"type: {schema['type']}"
+        
+        if 'properties' in schema:
+            properties = []
+            for prop_name, prop_schema in schema['properties'].items():
+                prop_type = prop_schema.get('type', 'unknown')
+                properties.append(f"{prop_name}({prop_type})")
+            schema_info += f" properties: [{', '.join(properties)}]"
+        
+        if 'items' in schema:
+            items_info = self._format_schema_info(schema['items'])
+            schema_info += f" items: {items_info}"
+        
+        return schema_info if schema_info else "unknown schema"
+
+    def _format_project_context_for_llm(self, context: ProjectContext, class_name: str) -> str:
         """Format project context for LLM consumption."""
         return f"""Project Context:
 - Package: {context.package_name}
-- Main Test Class: {context.main_test_class_name}
+- Test Class Name: {class_name}
 - Base URL: {context.base_url}
 - Output Directory: {context.output_dir}
 
-Requirements:
-- Use JUnit 4 annotations
-- Use Rest Assured for HTTP requests
-- Java 8 compatibility
-- Separate methods for positive and negative tests
-- Proper error handling and assertions
-- It is crucial to maintain the exact number of test methods (scenarios) already present in the provided test file. Do no add or remove any test methods."""
+CRITICAL REQUIREMENTS:
+1. Use JUnit 4 annotations (@Test, @Before, @After, @BeforeClass, @AfterClass)
+2. Use Rest Assured framework for HTTP requests (import static io.restassured.RestAssured.*)
+3. Java 8 compatibility (no newer Java features like var, lambda expressions in complex scenarios)
+4. Create a comprehensive @Before setup method with fixtures
+5. The setup method MUST populate the database using POST requests with all necessary data
+6. Ensure POST operations are executed before GET, PUT, or DELETE operations
+7. Each test method should be independent and repeatable
+8. Use proper assertions for status codes and response content
+9. Handle both positive and negative test cases appropriately
+10. Include proper error handling and meaningful test names
+11. Minimize test failures by ensuring proper data setup and teardown
+12. Follow Java naming conventions and best practices
+
+SETUP METHOD REQUIREMENTS:
+- Create a @Before method called setupTestData()
+- Use RestAssured to create fixture data via POST endpoints
+- Store created entity IDs in instance variables for use in tests
+- Create entities in the correct order (parent entities before child entities)
+- Use realistic test data that reflects real-world scenarios
+- Handle potential conflicts by using unique identifiers (timestamps, UUIDs)
+- Verify that POST operations succeed before proceeding
+- ALWAYS validate response is not null/empty before extracting fields
+- Use response.getStatusCode() to check success before parsing JSON
+- Handle cases where response might not contain expected fields like "id"
+
+TEST METHOD REQUIREMENTS:
+- Each @Test method should test exactly one scenario
+- Use descriptive method names that explain what is being tested
+- Include both positive and negative test cases
+- Use RestAssured's given().when().then() pattern
+- Assert on status codes, response body content, and headers when relevant
+- Use JsonPath for response validation when testing JSON APIs
+- Handle authentication if required by the API
+
+IMPORTS REQUIRED:
+- import static io.restassured.RestAssured.*;
+- import static org.hamcrest.Matchers.*;
+- import static org.junit.Assert.*;
+- import org.junit.*;
+- import io.restassured.response.Response;
+- import io.restassured.path.json.JsonPath;
+
+ERROR HANDLING AND RESPONSE VALIDATION:
+- Always check response.getStatusCode() before parsing JSON
+- Validate response body is not null or empty before using JsonPath
+- Use try-catch blocks around JSON parsing operations
+- Provide meaningful error messages in assertions
+- Use assumeTrue() for test preconditions
+- Handle network timeouts and connection issues gracefully
+- Example safe JSON extraction:
+  ```java
+  Response response = given().post("/endpoint");
+  if (response.getStatusCode() == 201 && response.getBody() != null) {{
+      String responseBody = response.getBody().asString();
+      if (responseBody != null && !responseBody.trim().isEmpty()) {{
+          JsonPath jsonPath = new JsonPath(responseBody);
+          if (jsonPath.get("id") != null) {{
+              String id = jsonPath.getString("id");
+              // use id safely
+          }}
+      }}
+  }}
+  ```
+
+IMPORTANT: Return ONLY the complete Java class code. Do NOT include explanations, comments, or markdown formatting. The code should be production-ready and compile without errors."""
     
     def _is_valid_java_code(self, code: str) -> bool:
         """
-        Basic validation of Java code structure.
+        Enhanced validation of Java code structure.
         
         Args:
             code: Java code to validate
@@ -378,6 +528,9 @@ Requirements:
         Returns:
             True if code appears to be valid Java
         """
+        if not code or not code.strip():
+            return False
+        
         # Basic checks for Java code structure
         required_elements = [
             'package ',
@@ -386,7 +539,77 @@ Requirements:
             '@Test'
         ]
         
-        return all(element in code for element in required_elements)
+        # Check for required elements
+        for element in required_elements:
+            if element not in code:
+                self.logger.warning(f"Missing required element in Java code: {element}")
+                return False
+        
+        # Check for proper class structure
+        if not self._has_proper_class_structure(code):
+            return False
+        
+        # Check for Rest Assured imports
+        rest_assured_imports = [
+            'io.restassured',
+            'static io.restassured.RestAssured'
+        ]
+        
+        has_rest_assured = any(imp in code for imp in rest_assured_imports)
+        if not has_rest_assured:
+            self.logger.warning("Missing Rest Assured imports in Java code")
+            return False
+        
+        # Check for JUnit imports
+        junit_imports = [
+            'org.junit',
+            '@Test',
+            '@BeforeClass'
+        ]
+        
+        has_junit = any(imp in code for imp in junit_imports)
+        if not has_junit:
+            self.logger.warning("Missing JUnit imports/annotations in Java code")
+            return False
+        
+        return True
+    
+    def _has_proper_class_structure(self, code: str) -> bool:
+        """
+        Check if the Java code has proper class structure.
+        
+        Args:
+            code: Java code to check
+        
+        Returns:
+            True if class structure is valid
+        """
+        # Count braces to ensure they are balanced
+        open_braces = code.count('{')
+        close_braces = code.count('}')
+        
+        if open_braces != close_braces:
+            self.logger.warning(f"Unbalanced braces in Java code: {open_braces} open, {close_braces} close")
+            return False
+        
+        # Check for class declaration
+        if 'public class ' not in code:
+            self.logger.warning("Missing public class declaration")
+            return False
+        
+        # Check for at least one test method
+        if '@Test' not in code:
+            self.logger.warning("Missing @Test annotation")
+            return False
+        
+        # Check for setup method
+        setup_indicators = ['@Before', '@BeforeClass', 'setupTestData', 'setUp']
+        has_setup = any(indicator in code for indicator in setup_indicators)
+        if not has_setup:
+            self.logger.warning("Missing setup method indicators")
+            return False
+        
+        return True
     
     async def _validate_generated_code(
         self,

@@ -51,7 +51,7 @@ class MavenRunner(LoggerMixin):
         """
         self.maven_home = Path(maven_home) if maven_home else None
         self.java_home = Path(java_home) if java_home else None
-        
+
         # Determine Maven executable
         self.maven_executable = self._find_maven_executable()
         

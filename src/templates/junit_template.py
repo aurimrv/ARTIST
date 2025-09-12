@@ -218,11 +218,11 @@ public class {{ class_name }} {
         
         # Add response time validation
         request_parts.append('            .time(lessThan((long) DEFAULT_TIMEOUT * 1000))')
-        
+
         # Add content type validation for successful responses
         if scenario.expected_status < 400:
             request_parts.append('            .contentType(ContentType.JSON)')
-        
+
         # Add response body validations
         if scenario.expected_response_schema and not scenario.is_negative_test:
             validations = self._generate_response_validations(scenario.expected_response_schema)
@@ -232,7 +232,7 @@ public class {{ class_name }} {
         request_parts.append('            .extract().response();')
         
         lines.append('\n'.join(request_parts))
-        
+
         # Add additional assertions if needed
         if not scenario.is_negative_test:
             lines.append('')
