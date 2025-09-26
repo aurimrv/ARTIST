@@ -86,13 +86,11 @@ class OpenRouterClient(LoggerMixin):
             **kwargs
         }
         
-
         print(f"#### Model: {payload['model']}")
         print(f"#### Max_Tokens: {payload['max_tokens']}")
         print(f"#### Temperature: {payload['temperature']}")
         print(f"#### Message: {payload['messages']}")
 
-        
         self.logger.debug(f"Making chat completion request with model: {model}")
         
         try:
@@ -280,58 +278,7 @@ Format the output as a structured JSON with the following schema:
             system_message=system_message,
             **kwargs
         )
-    
-    async def generate_test_code(
-        self,
-        scenarios: str,
-        project_context: str,
-        model: str,
-        **kwargs
-    ) -> str:
-        """
-        Generate JUnit test code based on scenarios.
-        
-        Args:
-            scenarios: Test scenarios JSON
-            project_context: Project context information
-            model: Model name to use
-            **kwargs: Additional parameters
-        
-        Returns:
-            Generated test code
-        """
-        system_message = """You are an expert Java developer specializing in test automation.
-Your task is to generate JUnit 4 test code using Rest Assured for API integration testing.
-Follow best practices for test organization, naming, and assertions.
-IMPORTANT: Return ONLY the Java code without any explanations, comments, or markdown formatting."""
-        
-        prompt = f"""Generate JUnit 4 test code using Rest Assured based on the following test scenarios and project context.
 
-Test Scenarios:
-{scenarios}
-
-Project Context:
-{project_context}
-
-Requirements:
-1. Use JUnit 4 annotations (@Test, @Before, @After, etc.)
-2. Use Rest Assured for HTTP requests
-3. Create separate test methods for each scenario
-4. Include proper assertions for status codes and response content
-5. Handle both positive and negative test cases
-6. Follow Java naming conventions
-7. Include necessary imports
-8. Make tests independent and repeatable
-9. Assume API database is empty. Create a setup method populating the database using POST method with all parameters used during test
-
-CRITICAL: Return ONLY the complete Java class code. Do NOT include any explanations, descriptions, or markdown code blocks. Start directly with the package declaration or imports."""
-        
-        return await self.generate_text(
-            prompt=prompt,
-            model=model,
-            system_message=system_message,
-            **kwargs
-        )
     
     async def fix_compilation_errors(
         self,
@@ -366,7 +313,32 @@ Java Code:
 Compilation Errors:
 {errors}
 
-CRITICAL: Return ONLY the corrected Java code that resolves all compilation errors. Do NOT include any explanations, descriptions, or markdown code blocks. Maintain the original functionality and test logic while fixing syntax and import issues."""
+CRITICAL COMPILATION FIX REQUIREMENTS:
+1. Fix ONLY compilation errors (syntax, imports, method signatures, etc.)
+2. DO NOT regenerate or modify test scenarios - they are correct as generated
+3. DO NOT change test method logic or assertions
+4. DO NOT add, remove, or modify @Test methods
+5. Focus ONLY on making the existing code compile successfully
+6. Preserve all existing test scenarios and their logic
+7. Fix only: missing imports, syntax errors, method signatures, variable declarations
+8. Maintain the original test structure and functionality
+
+WHAT TO FIX:
+- Missing import statements
+- Incorrect method signatures
+- Variable declaration issues
+- Syntax errors (missing semicolons, brackets, etc.)
+- Type mismatches
+- Access modifier issues
+
+WHAT NOT TO CHANGE:
+- Test method names or logic
+- Test scenarios or assertions
+- @Test method content
+- Setup method logic (unless syntax error)
+- Test data or expected results
+
+CRITICAL: Return ONLY the corrected Java code that resolves all compilation errors. Do NOT include any explanations, descriptions, or markdown code blocks. Maintain the original functionality and test logic while fixing ONLY syntax and import issues."""
         
         return await self.generate_text(
             prompt=prompt,
@@ -394,19 +366,27 @@ CRITICAL: Return ONLY the corrected Java code that resolves all compilation erro
         Returns:
             Fixed Java test code
         """
-        system_message = """You are an expert test automation engineer specializing in fixing failing tests.
-Your task is to analyze test failures and provide corrected test code that passes reliably.
-IMPORTANT: Return ONLY the corrected Java code without any explanations or markdown formatting."""
+        system_message = """You are an expert test automation engineer specializing in fixing failing API 
+        tests.\n\nYour core principles:\n- Analyze failure patterns to understand actual API behavior\n- 
+        Prefer adapting expectations to reality over ignoring tests\n- Apply consistent fixes across similar 
+        test patterns\n- Provide working code that reflects actual API behavior\n\nStatus code flexibility 
+        guidelines:\n- Client errors (4xx): 400↔404↔405↔409 are interchangeable for invalid inputs\n- Server 
+        errors (5xx): Accept 500/502/503 if consistently returned\n- Success codes: 200↔201↔204 acceptable 
+        based on operation type\n\nWhen changing expected status codes, add explanatory comments:\n// API 
+        returns {actual} instead of {expected} - {reason}\n\nUse @Ignore only for clearly unimplemented 
+        endpoints with specific reasons.\n\nIMPORTANT: Return ONLY the corrected Java code without any 
+        explanations or markdown formatting."""
         
-        prompt = f"""Fix the test failures in the following Java test code:
-
-Java Test Code:
+        prompt = f"""Fix the test failures in the following Java test code. Analyze the failure patterns 
+        and adapt the tests to match the actual API behavior:\n\nJava Test Code:
 ```java
 {code}
 ```
 
 Test Failures:
 {failures}
+
+Apply consistent fixes across similar failures and ensure the corrected tests will pass reliably against the actual API implementation.
 
 CRITICAL: Return ONLY the corrected Java test code that resolves the test failures. Do NOT include any explanations, descriptions, or markdown code blocks. If a test cannot be fixed reliably, add @Ignore annotation with a clear reason."""
 
@@ -417,20 +397,21 @@ CRITICAL: Return ONLY the corrected Java test code that resolves the test failur
             **kwargs
         )
     
-    async def generate_test_code_with_context(
+
+    async def generate_test_code_with_full_context(
         self,
         scenarios_context: str,
-        project_context: str,
+        project_context: dict,
         openapi_context: str,
         model: str,
         **kwargs
     ) -> str:
         """
-        Generate JUnit test code with full context including OpenAPI specification.
+        Generate JUnit test code with full project context and requirements.
         
         Args:
             scenarios_context: Formatted test scenarios
-            project_context: Project context with requirements
+            project_context: Project context dictionary with package, class name, etc.
             openapi_context: OpenAPI specification context
             model: Model name to use
             **kwargs: Additional parameters
@@ -443,7 +424,79 @@ Your task is to generate JUnit 4 test code using Rest Assured for API integratio
 Follow best practices for test organization, naming, and assertions.
 IMPORTANT: Return ONLY the Java code without any explanations, comments, or markdown formatting."""
         
-        prompt = f"""{project_context}
+        # Format project context
+        project_context_str = f"""Project Context:
+- Package: {project_context.get('package_name', 'com.example.tests')}
+- Test Class Name: {project_context.get('class_name', 'ApiIntegrationTest')}
+- Base URL: {project_context.get('base_url', 'http://localhost:8080')}
+- Output Directory: {project_context.get('output_dir', 'output')}
+
+CRITICAL REQUIREMENTS:
+1. Use JUnit 4 annotations (@Test, @Before, @After, @BeforeClass, @AfterClass)
+2. Use Rest Assured framework for HTTP requests (import static io.restassured.RestAssured.*)
+3. Java 8 compatibility (no newer Java features like var, lambda expressions in complex scenarios)
+4. Create a comprehensive @Before setupTestData() method with fixtures
+5. Create a comprehensive @After cleanupTestData() method that reliably removes all data created by setupTestData()
+6. Ensure cleanupTestData() uses DELETE requests in the correct dependency order (child entities first, then parents)
+7. setupTestData() and cleanupTestData() MUST always be complementary and symmetric: every entity created in setup must be deleted in cleanup, and no entity should be deleted unless it was created in setup.
+8. The setup method MUST populate the database using POST requests with all necessary data
+9. Ensure POST operations are executed before GET, PUT, or DELETE operations
+10. Each test method should be independent and repeatable
+11. Use proper assertions for status codes and response content
+12. Handle both positive and negative test cases appropriately
+13. Include proper error handling and meaningful test names
+14. Minimize test failures by ensuring proper data setup and teardown
+15. Follow Java naming conventions and best practices
+
+SETUP AND CLEANUP METHOD REQUIREMENTS:
+- Create a @Before method called setupTestData()
+- Create a @After method called cleanupTestData()
+- setupTestData() must always create a consistent set of fixture data that is sufficient for all test scenarios.
+- This includes creating at least one parent entity and all required child entities so that any test can run independently without missing data.
+- setupTestData() must use RestAssured POST endpoints to create fixture data in the correct order (parents before children)
+- cleanupTestData() must use RestAssured DELETE endpoints to remove all created data in reverse order (children before parents) without assertions
+- cleanupTestData() must always remove exactly the data created in setupTestData(), in reverse dependency order.
+- setupTestData() and cleanupTestData() must be resilient to empty or missing response bodies.
+- Both setupTestData() and cleanupTestData() must be symmetric: everything created must be deleted, and nothing should be deleted if it was not created in setupTestData().
+- They must use request parameters as fallback identifiers when no response body is returned.
+- Never fail a test due to attempting to parse an empty response.
+- Only @Before method must validate status codes and ensure operations succeeded
+- Both methods must handle errors gracefully to avoid test contamination
+- Create entities in the correct order (parent entities before child entities)
+- Use realistic test data that reflects real-world scenarios
+
+TEST METHOD REQUIREMENTS:
+- Each @Test method should test exactly one scenario
+- Use descriptive method names that explain what is being tested
+- Include both positive and negative test cases
+- Use RestAssured's given().when().then() pattern
+- Assert on status codes, response body content, and headers when relevant
+- Use JsonPath for response validation when testing JSON APIs
+- Handle authentication if required by the API
+
+IMPORTS REQUIRED:
+- import static io.restassured.RestAssured.*;
+- import static org.hamcrest.Matchers.*;
+- import static org.junit.Assert.*;
+- import org.junit.*;
+- import io.restassured.response.Response;
+- import io.restassured.path.json.JsonPath;
+
+ERROR HANDLING AND RESPONSE VALIDATION:
+- Always check response.getStatusCode() before parsing JSON
+- Validate response body is not null or empty before using JsonPath
+- NEVER assume that a response body contains JSON
+- ALWAYS check responseBody != null AND !responseBody.trim().isEmpty() before calling JsonPath
+- If the response body is empty, do NOT attempt to parse it as JSON
+- When identifiers are required later (e.g., IDs, names), use known input values from the request if the response does not provide them
+- If JSON parsing fails or the field is missing, handle gracefully and skip JsonPath usage
+- For POST/PUT endpoints that may return only a status code (201/204) without a body, assert only on the status code and headers
+- Use try-catch blocks around JSON parsing operations
+- Provide meaningful error messages in assertions
+- Use assumeTrue() for test preconditions
+- Handle network timeouts and connection issues gracefully
+"""        
+        prompt = f"""{project_context_str}
 
 {openapi_context}
 

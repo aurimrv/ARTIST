@@ -279,19 +279,27 @@ class GeneratorAgent(BaseAgent):
         try:
             # Prepare contexts for LLM using centralized formatting
             scenarios_context = self._format_scenarios_for_llm(scenarios)
-            project_context_str = self._format_project_context_for_llm(context, class_name)
             openapi_context = self._format_openapi_context_for_llm(context)
+            
+            # Prepare project context as dictionary
+            project_context_dict = {
+                'package_name': context.package_name,
+                'class_name': class_name,
+                'base_url': context.base_url,
+                'output_dir': str(context.output_dir)
+            }
 
             self.logger.info(f"Generator MAX_TOKENS: {self.get_max_tokens()}")
 
-            # Use centralized method from openrouter_client
-            test_content = await self.openrouter_client.generate_test_code_with_context(
+            # Use centralized method from openrouter_client with full context
+            test_content = await self.openrouter_client.generate_test_code_with_full_context(
                 scenarios_context=scenarios_context,
-                project_context=project_context_str,
+                project_context=project_context_dict,
                 openapi_context=openapi_context,
                 model=self.get_model_name(),
                 max_tokens=self.get_max_tokens(),
-                temperature=self.get_temperature()
+                temperature=self.get_temperature(),
+                seed=self.get_seed()
             )
 
             # Sanitize LLM output to remove commentary and extract only code
@@ -482,81 +490,6 @@ class GeneratorAgent(BaseAgent):
         
         return schema_info if schema_info else "unknown schema"
 
-    def _format_project_context_for_llm(self, context: ProjectContext, class_name: str) -> str:
-        """Format project context for LLM consumption."""
-        return f"""Project Context:
-- Package: {context.package_name}
-- Test Class Name: {class_name}
-- Base URL: {context.base_url}
-- Output Directory: {context.output_dir}
-
-CRITICAL REQUIREMENTS:
-1. Use JUnit 4 annotations (@Test, @Before, @After, @BeforeClass, @AfterClass)
-2. Use Rest Assured framework for HTTP requests (import static io.restassured.RestAssured.*)
-3. Java 8 compatibility (no newer Java features like var, lambda expressions in complex scenarios)
-4. Create a comprehensive @Before setup method with fixtures
-5. The setup method MUST populate the database using POST requests with all necessary data
-6. Ensure POST operations are executed before GET, PUT, or DELETE operations
-7. Each test method should be independent and repeatable
-8. Use proper assertions for status codes and response content
-9. Handle both positive and negative test cases appropriately
-10. Include proper error handling and meaningful test names
-11. Minimize test failures by ensuring proper data setup and teardown
-12. Follow Java naming conventions and best practices
-
-SETUP METHOD REQUIREMENTS:
-- Create a @Before method called setupTestData()
-- Use RestAssured to create fixture data via POST endpoints
-- Store created entity IDs in instance variables for use in tests
-- Create entities in the correct order (parent entities before child entities)
-- Use realistic test data that reflects real-world scenarios
-- Handle potential conflicts by using unique identifiers (timestamps, UUIDs)
-- Verify that POST operations succeed before proceeding
-- ALWAYS validate response is not null/empty before extracting fields
-- Use response.getStatusCode() to check success before parsing JSON
-- Handle cases where response might not contain expected fields like "id"
-
-TEST METHOD REQUIREMENTS:
-- Each @Test method should test exactly one scenario
-- Use descriptive method names that explain what is being tested
-- Include both positive and negative test cases
-- Use RestAssured's given().when().then() pattern
-- Assert on status codes, response body content, and headers when relevant
-- Use JsonPath for response validation when testing JSON APIs
-- Handle authentication if required by the API
-
-IMPORTS REQUIRED:
-- import static io.restassured.RestAssured.*;
-- import static org.hamcrest.Matchers.*;
-- import static org.junit.Assert.*;
-- import org.junit.*;
-- import io.restassured.response.Response;
-- import io.restassured.path.json.JsonPath;
-
-ERROR HANDLING AND RESPONSE VALIDATION:
-- Always check response.getStatusCode() before parsing JSON
-- Validate response body is not null or empty before using JsonPath
-- Use try-catch blocks around JSON parsing operations
-- Provide meaningful error messages in assertions
-- Use assumeTrue() for test preconditions
-- Handle network timeouts and connection issues gracefully
-- Example safe JSON extraction:
-  ```java
-  Response response = given().post("/endpoint");
-  if (response.getStatusCode() == 201 && response.getBody() != null) {{
-      String responseBody = response.getBody().asString();
-      if (responseBody != null && !responseBody.trim().isEmpty()) {{
-          JsonPath jsonPath = new JsonPath(responseBody);
-          if (jsonPath.get("id") != null) {{
-              String id = jsonPath.getString("id");
-              // use id safely
-          }}
-      }}
-  }}
-  ```
-
-IMPORTANT: Return ONLY the complete Java class code. Do NOT include explanations, comments, or markdown formatting. The code should be production-ready and compile without errors."""
-    
     def _is_valid_java_code(self, code: str) -> bool:
         """
         Enhanced validation of Java code structure.

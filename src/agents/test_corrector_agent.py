@@ -866,10 +866,14 @@ class TestCorrectorAgent(BaseAgent):
     
     def _add_ignore_annotation(self, content: str, method_name: str, reason: str) -> str:
         """Add @Ignore annotation to a test method."""
-        # Find the test method
-        method_pattern = rf'(@Test\s*\n\s*public\s+void\s+{re.escape(method_name)}\s*\(\s*\))'
+        # Find the test method with proper indentation handling
+        method_pattern = rf'(\s*)(@Test\s*\n\s*public\s+void\s+{re.escape(method_name)}\s*\(\s*\))'
         
-        replacement = f'@Ignore("{reason}")\n    \\1'
+        def replacement(match):
+            indent = match.group(1)
+            test_annotation_and_method = match.group(2)
+            # Add @Ignore with same indentation as @Test, no blank line
+            return f'{indent}@Ignore("{reason}")\n{indent}{test_annotation_and_method}'
         
         # Check if @Ignore import exists
         if 'import org.junit.Ignore;' not in content:
@@ -1013,36 +1017,63 @@ class TestCorrectorAgent(BaseAgent):
         }
     
     def _extract_ignore_reason(self, failure: TestFailure) -> str:
-        """Extract a meaningful reason for ignoring the test from the failure."""
-        message = failure.message.strip()
+        """
+        Extract a meaningful ignore reason from test failure.
         
-        # Common patterns for test failures
-        if "Expected status code" in message:
-            # Extract expected vs actual status codes
-            import re
-            match = re.search(r'Expected status code <(\d+)> but was <(\d+)>', message)
-            if match:
-                expected, actual = match.groups()
-                return f"Expected HTTP {expected} but got {actual}"
+        Args:
+            failure: TestFailure object containing failure information
         
-        if "Connection refused" in message or "ConnectException" in message:
-            return "Service unavailable - connection refused"
+        Returns:
+            Meaningful ignore reason for @Ignore annotation
+        """
+        message = failure.message or ""
         
+        # Use the original failure message from XML if it's meaningful
+        if message and len(message.strip()) > 0:
+            # Clean up the message for use in @Ignore annotation
+            clean_message = message.strip()
+            
+            # Remove excessive whitespace and newlines
+            clean_message = ' '.join(clean_message.split())
+            
+            # Escape quotes for Java string
+            clean_message = clean_message.replace('"', '\\"')
+            
+            # Truncate if too long but preserve meaningful content
+            if len(clean_message) > 120:
+                # Try to find a good breaking point
+                if ': ' in clean_message[:120]:
+                    # Break at the first colon within reasonable length
+                    break_point = clean_message.find(': ', 0, 120)
+                    clean_message = clean_message[:break_point + 1].strip()
+                elif '. ' in clean_message[:120]:
+                    # Break at the first period within reasonable length
+                    break_point = clean_message.find('. ', 0, 120)
+                    clean_message = clean_message[:break_point + 1].strip()
+                else:
+                    # Simple truncation with ellipsis
+                    clean_message = clean_message[:117] + "..."
+            
+            return clean_message
+        
+        # Fallback to generic messages based on failure type
         if "timeout" in message.lower():
             return "Test timeout exceeded"
         
         if "assertion" in message.lower() or "expectation failed" in message.lower():
-            # Try to extract the specific assertion that failed
-            lines = message.split('\n')
-            for line in lines:
-                if 'expectation failed' in line.lower() or 'assertion' in line.lower():
-                    return line.strip()[:100]  # Limit length
+            return "Assertion failure - needs manual review"
+        
+        if "connection" in message.lower() or "network" in message.lower():
+            return "Network/connection issue"
+        
+        if "null" in message.lower() and "pointer" in message.lower():
+            return "Null pointer exception"
+        
+        if "compilation" in message.lower() or "syntax" in message.lower():
+            return "Compilation/syntax error"
         
         # Generic fallback
-        if len(message) > 100:
-            return message[:97] + "..."
-        
-        return message if message else "Test failure - see logs for details"
+        return "Test failure - see logs for details"
     
     def _add_ignore_annotation(self, content: str, test_method: str, reason: str) -> str:
         """
@@ -1070,7 +1101,7 @@ class TestCorrectorAgent(BaseAgent):
             test_params = match.group(2) or ""
             method_indent = match.group(3)
             
-            # Add @Ignore annotation before @Test
+            # Add @Ignore annotation before @Test (no blank line)
             return f'{indent}@Ignore("{escaped_reason}")\n{indent}@Test{test_params}\n{method_indent}public void {test_method}('
         
         modified_content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
