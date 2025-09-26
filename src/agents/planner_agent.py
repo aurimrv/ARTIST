@@ -395,11 +395,13 @@ class PlannerAgent(BaseAgent):
             # Get LLM enhancement
             prompt = self._build_enhancement_prompt(context)
             
-            response = await self.openrouter_client.generate_text(
-                prompt=prompt,
-                model=self.config.model,
-                max_tokens=8000,
-                temperature=0.1
+            response = await self.openrouter_client.generate_enhanced_test_scenarios(
+                api_spec=api_spec,
+                implementation_info=base_url,
+                existing_scenarios=context,
+                model=self.get_model_name(),
+                max_tokens=self.get_max_tokens(),
+                temperature=self.get_temperature()
             )
             
             if response:

@@ -24,6 +24,7 @@ class AgentConfig:
     max_tokens: int = 16000
     temperature: float = 0.1
     timeout: int = 60
+    seed: Optional[int] = None
     
     
 @dataclass

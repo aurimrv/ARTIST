@@ -86,6 +86,13 @@ class OpenRouterClient(LoggerMixin):
             **kwargs
         }
         
+
+        print(f"#### Model: {payload['model']}")
+        print(f"#### Max_Tokens: {payload['max_tokens']}")
+        print(f"#### Temperature: {payload['temperature']}")
+        print(f"#### Message: {payload['messages']}")
+
+        
         self.logger.debug(f"Making chat completion request with model: {model}")
         
         try:
@@ -410,6 +417,100 @@ CRITICAL: Return ONLY the corrected Java test code that resolves the test failur
             **kwargs
         )
     
+    async def generate_test_code_with_context(
+        self,
+        scenarios_context: str,
+        project_context: str,
+        openapi_context: str,
+        model: str,
+        **kwargs
+    ) -> str:
+        """
+        Generate JUnit test code with full context including OpenAPI specification.
+        
+        Args:
+            scenarios_context: Formatted test scenarios
+            project_context: Project context with requirements
+            openapi_context: OpenAPI specification context
+            model: Model name to use
+            **kwargs: Additional parameters
+        
+        Returns:
+            Generated test code
+        """
+        system_message = """You are an expert Java developer specializing in test automation.
+Your task is to generate JUnit 4 test code using Rest Assured for API integration testing.
+Follow best practices for test organization, naming, and assertions.
+IMPORTANT: Return ONLY the Java code without any explanations, comments, or markdown formatting."""
+        
+        prompt = f"""{project_context}
+
+{openapi_context}
+
+{scenarios_context}
+
+CRITICAL: Return ONLY the complete Java class code. Do NOT include any explanations, descriptions, or markdown code blocks. Start directly with the package declaration or imports."""
+        
+        return await self.generate_text(
+            prompt=prompt,
+            model=model,
+            system_message=system_message,
+            **kwargs
+        )
+
+    async def generate_enhanced_test_scenarios(
+        self,
+        api_spec: str,
+        implementation_info: str,
+        existing_scenarios: str,
+        model: str,
+        **kwargs
+    ) -> str:
+        """
+        Generate enhanced test scenarios with LLM analysis.
+        
+        Args:
+            api_spec: API specification content
+            implementation_info: Implementation analysis
+            existing_scenarios: Existing scenarios to enhance
+            model: Model name to use
+            **kwargs: Additional parameters
+        
+        Returns:
+            Enhanced test scenarios
+        """
+        system_message = """You are an expert test architect specializing in REST API testing.
+Your task is to enhance existing test scenarios by adding more comprehensive test cases,
+improving test data, and ensuring better coverage of edge cases and error conditions."""
+        
+        prompt = f"""Enhance the following test scenarios based on the API specification and implementation analysis.
+
+API Specification:
+{api_spec}
+
+Implementation Analysis:
+{implementation_info}
+
+Existing Scenarios:
+{existing_scenarios}
+
+Please enhance the scenarios by:
+1. Adding missing edge cases and boundary conditions
+2. Improving test data to be more realistic and comprehensive
+3. Adding more negative test cases for error conditions
+4. Ensuring proper parameter validation tests
+5. Adding tests for different content types and response formats
+6. Considering authentication and authorization scenarios if applicable
+
+Maintain the same JSON format as the existing scenarios but with enhanced content."""
+        
+        return await self.generate_text(
+            prompt=prompt,
+            model=model,
+            system_message=system_message,
+            **kwargs
+        )
+
     async def get_available_models(self) -> List[Dict[str, Any]]:
         """
         Get list of available models from OpenRouter.

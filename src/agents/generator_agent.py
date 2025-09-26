@@ -95,9 +95,7 @@ class GeneratorAgent(BaseAgent):
             validation_result = await self._validate_generated_code(project_dir, generated_files)
             
             self.logger.info(f"Generated {len(generated_files)} test files")
-
-            ####
-            exit(1)
+            
             return {
                 'success': True,
                 'message': f"Successfully generated {len(generated_files)} test files",
@@ -279,28 +277,18 @@ class GeneratorAgent(BaseAgent):
             Generated test class content or None if generation fails
         """
         try:
-            # Prepare scenarios context for LLM
+            # Prepare contexts for LLM using centralized formatting
             scenarios_context = self._format_scenarios_for_llm(scenarios)
-            
-            # Prepare project context for LLM
             project_context_str = self._format_project_context_for_llm(context, class_name)
-            
-            # Include OpenAPI specification if available
             openapi_context = self._format_openapi_context_for_llm(context)
 
             self.logger.info(f"Generator MAX_TOKENS: {self.get_max_tokens()}")
 
-            # Combine all contexts for LLM
-            full_context = f"""{project_context_str}
-
-{openapi_context}
-
-{scenarios_context}"""
-
-            # Generate complete test class using LLM
-            test_content = await self.openrouter_client.generate_test_code(
-                scenarios=full_context,
-                project_context="",  # Already included in scenarios
+            # Use centralized method from openrouter_client
+            test_content = await self.openrouter_client.generate_test_code_with_context(
+                scenarios_context=scenarios_context,
+                project_context=project_context_str,
+                openapi_context=openapi_context,
                 model=self.get_model_name(),
                 max_tokens=self.get_max_tokens(),
                 temperature=self.get_temperature()
@@ -370,14 +358,45 @@ class GeneratorAgent(BaseAgent):
                         if 'description' in info:
                             openapi_context += f"API Description: {info['description']}\n"
                     
+                    # Global consumes/produces (OpenAPI 2.0)
+                    global_consumes = api_spec.get('consumes', [])
+                    global_produces = api_spec.get('produces', [])
+                    
+                    if global_consumes:
+                        openapi_context += f"\nGlobal Consumes (Request Content-Types): {', '.join(global_consumes)}\n"
+                    if global_produces:
+                        openapi_context += f"Global Produces (Response Content-Types): {', '.join(global_produces)}\n"
+                    
                     # Paths and operations
                     if 'paths' in api_spec:
-                        openapi_context += "\nAPI Endpoints and Response Schemas:\n"
+                        openapi_context += "\nAPI Endpoints and Content Type Information:\n"
                         for path, methods in api_spec['paths'].items():
                             openapi_context += f"\nPath: {path}\n"
                             for method, operation in methods.items():
                                 if isinstance(operation, dict):
                                     openapi_context += f"  {method.upper()}:\n"
+                                    
+                                    # Operation-specific consumes/produces (OpenAPI 2.0)
+                                    operation_consumes = operation.get('consumes', global_consumes)
+                                    operation_produces = operation.get('produces', global_produces)
+                                    
+                                    if operation_consumes:
+                                        openapi_context += f"    Consumes (Request Content-Types): {', '.join(operation_consumes)}\n"
+                                    if operation_produces:
+                                        openapi_context += f"    Produces (Response Content-Types): {', '.join(operation_produces)}\n"
+                                    
+                                    # Request body (OpenAPI 3.0)
+                                    if 'requestBody' in operation:
+                                        request_body = operation['requestBody']
+                                        openapi_context += "    Request Body:\n"
+                                        if 'content' in request_body:
+                                            for content_type, content in request_body['content'].items():
+                                                openapi_context += f"      Content-Type: {content_type}\n"
+                                                if 'schema' in content:
+                                                    schema_info = self._format_schema_info(content['schema'])
+                                                    openapi_context += f"        Schema: {schema_info}\n"
+                                        required = request_body.get('required', False)
+                                        openapi_context += f"      Required: {required}\n"
                                     
                                     # Parameters
                                     if 'parameters' in operation:
@@ -386,7 +405,8 @@ class GeneratorAgent(BaseAgent):
                                             param_name = param.get('name', 'unknown')
                                             param_type = param.get('type', param.get('schema', {}).get('type', 'unknown'))
                                             param_required = param.get('required', False)
-                                            openapi_context += f"      - {param_name} ({param_type}) {'[required]' if param_required else '[optional]'}\n"
+                                            param_in = param.get('in', 'unknown')
+                                            openapi_context += f"      - {param_name} ({param_type}) in {param_in} {'[required]' if param_required else '[optional]'}\n"
                                     
                                     # Responses
                                     if 'responses' in operation:
@@ -394,13 +414,20 @@ class GeneratorAgent(BaseAgent):
                                         for status_code, response in operation['responses'].items():
                                             openapi_context += f"      {status_code}: {response.get('description', 'No description')}\n"
                                             
-                                            # Response schema
+                                            # Response content (OpenAPI 3.0)
                                             if 'content' in response:
                                                 for content_type, content in response['content'].items():
+                                                    openapi_context += f"        Content-Type: {content_type}\n"
                                                     if 'schema' in content:
                                                         schema = content['schema']
-                                                        openapi_context += f"        Content-Type: {content_type}\n"
                                                         openapi_context += f"        Schema: {self._format_schema_info(schema)}\n"
+                                            
+                                            # Response headers
+                                            if 'headers' in response:
+                                                openapi_context += "        Headers:\n"
+                                                for header_name, header_spec in response['headers'].items():
+                                                    header_type = header_spec.get('type', header_spec.get('schema', {}).get('type', 'string'))
+                                                    openapi_context += f"          {header_name}: {header_type}\n"
                     
                     # Components/schemas
                     if 'components' in api_spec and 'schemas' in api_spec['components']:
@@ -408,17 +435,29 @@ class GeneratorAgent(BaseAgent):
                         for schema_name, schema in api_spec['components']['schemas'].items():
                             openapi_context += f"  {schema_name}: {self._format_schema_info(schema)}\n"
                     
-                    openapi_context += "\nIMPORTANT: Use this specification to understand the exact response structure and field names. Do NOT assume fields like 'id' exist unless specified in the schema.\n"
+                    # Definitions (OpenAPI 2.0)
+                    elif 'definitions' in api_spec:
+                        openapi_context += "\nData Models:\n"
+                        for schema_name, schema in api_spec['definitions'].items():
+                            openapi_context += f"  {schema_name}: {self._format_schema_info(schema)}\n"
+                    
+                    openapi_context += "\nIMPORTANT CONTENT-TYPE GUIDELINES:\n"
+                    openapi_context += "- Use the correct Content-Type headers for requests based on 'consumes' or 'requestBody.content'\n"
+                    openapi_context += "- Expect the correct Content-Type in responses based on 'produces' or 'responses.content'\n"
+                    openapi_context += "- For JSON APIs, typically use 'application/json' for both request and response\n"
+                    openapi_context += "- For form data, use 'application/x-www-form-urlencoded' or 'multipart/form-data'\n"
+                    openapi_context += "- Always validate response Content-Type matches expected values\n"
+                    openapi_context += "- Do NOT assume fields like 'id' exist unless specified in the response schema\n"
                     
                     return openapi_context
                 else:
                     self.logger.warning(f"OpenAPI specification file not found: {spec_path}")
             
-            return "OpenAPI Specification: Not available - use careful response validation in tests.\n"
+            return "OpenAPI Specification: Not available - use careful response validation and standard Content-Types in tests.\n"
             
         except Exception as e:
             self.logger.warning(f"Failed to load OpenAPI specification: {e}")
-            return "OpenAPI Specification: Failed to load - use careful response validation in tests.\n"
+            return "OpenAPI Specification: Failed to load - use careful response validation and standard Content-Types in tests.\n"
 
     def _format_schema_info(self, schema: dict) -> str:
         """Format schema information for LLM context."""

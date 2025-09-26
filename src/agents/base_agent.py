@@ -103,6 +103,10 @@ class BaseAgent(ABC, LoggerMixin):
         """Get the timeout setting for this agent."""
         return self.config.timeout
     
+    def get_seed(self) -> Optional[int]:
+        """Get the seed setting for this agent."""
+        return self.config.seed
+    
     def is_initialized(self) -> bool:
         """Check if the agent is initialized."""
         return self._initialized
