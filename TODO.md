@@ -1,5 +1,14 @@
 # Output generted_test with timestamp
 
+# Deal with maven test execution timeout
+
+	- When exiting because of maven timeout, test set must be kept unchanged, i.e, no @Ignore must be included.
+
+# @Ignore message must avoid escape character. Include only simple plain text no special character to avoid compilatio errors due @Ignore messages
+
+
+# Duplicate @Ignore keep just one per @Test
+
 # Parameters
 
 --api-spec (opcional) --api-src (mandatory)
