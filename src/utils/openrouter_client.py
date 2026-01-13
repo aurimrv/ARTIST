@@ -447,7 +447,6 @@ CRITICAL REQUIREMENTS:
 13. Include proper error handling and meaningful test names
 14. Minimize test failures by ensuring proper data setup and teardown
 15. Follow Java naming conventions and best practices
-16. ALL @Test methods MUST explicitly declare a timeout of 60000 milliseconds using @Test(timeout = 60000)
 
 SETUP AND CLEANUP METHOD REQUIREMENTS:
 - Create a @Before method called setupTestData()
