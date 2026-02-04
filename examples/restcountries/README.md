@@ -285,7 +285,6 @@ Similar projects
 * [REST Countries Go]
 * [REST Countries Python]
 * [world-currencies]
-* [REST Countries C#](https://github.com/egbakou/RESTCountries.NET)
 
 License
 =======

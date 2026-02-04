@@ -115,8 +115,8 @@ class Settings:
             agents[agent_name] = AgentConfig(
                 name=agent_name,
                 model=model,
-                max_tokens=self._get_env_int(f'{agent_name.upper()}_MAX_TOKENS', 16000),
-                temperature=self._get_env_float(f'{agent_name.upper()}_TEMPERATURE', 0.1),
+                max_tokens=self._get_env_int(f'{agent_name.upper()}_MAX_TOKENS', 102400),
+                temperature=self._get_env_float(f'{agent_name.upper()}_TEMPERATURE', 0.7),
                 timeout=self._get_env_int(f'{agent_name.upper()}_TIMEOUT', 60),
                 seed=self._get_env_int(f'{agent_name.upper()}_SEED', None) if self._get_env(f'{agent_name.upper()}_SEED') else None
             )

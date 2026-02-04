@@ -21,8 +21,8 @@ class AgentConfig:
     """Configuration for individual agents."""
     name: str
     model: str
-    max_tokens: int = 16000
-    temperature: float = 0.1
+    max_tokens: int = 102400
+    temperature: float = 0.7
     timeout: int = 60
     seed: Optional[int] = None
     

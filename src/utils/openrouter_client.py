@@ -2,6 +2,9 @@
 OpenRouter API client for the API Test Generator System.
 """
 
+import json
+import os
+from datetime import datetime
 from typing import Dict, List, Any, Optional
 import requests
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -52,8 +55,8 @@ class OpenRouterClient(LoggerMixin):
         self,
         messages: List[Dict[str, str]],
         model: str,
-        max_tokens: int = 16000,
-        temperature: float = 0.1,
+        max_tokens: int = 102400,
+        temperature: float = 0.7,
         stream: bool = False,
         **kwargs
     ) -> Dict[str, Any]:
@@ -86,10 +89,11 @@ class OpenRouterClient(LoggerMixin):
             **kwargs
         }
         
+        print("### funcao chat_completion")
         print(f"#### Model: {payload['model']}")
         print(f"#### Max_Tokens: {payload['max_tokens']}")
         print(f"#### Temperature: {payload['temperature']}")
-        print(f"#### Message: {payload['messages']}")
+        # print(f"#### Message: {payload['messages']}")
 
         self.logger.debug(f"Making chat completion request with model: {model}")
         
@@ -103,9 +107,26 @@ class OpenRouterClient(LoggerMixin):
             
             response.raise_for_status()
             result = response.json()
-            
+
             # Update rate limiter with actual usage
             usage = result.get('usage', {})
+
+            # Extrair os dados do response.usage
+            usage_data = {
+                "completion_tokens": usage.get("completion_tokens"),
+                "prompt_tokens": usage.get("prompt_tokens"),
+                "total_tokens": usage.get("total_tokens"),
+                "cost_total": usage.get("cost"),
+                "cost_prompt": usage.get("cost_details", {}).get("upstream_inference_prompt_cost"),
+                "cost_completion": usage.get("cost_details", {}).get("upstream_inference_completions_cost"),
+            }
+
+            os.makedirs("./llm_interactions", exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")[:-3]
+            filename = f"./llm_interactions/{timestamp}_cost.json"
+            with open(filename, "w", encoding="utf-8") as f:
+                json.dump(usage_data, f, indent=2, ensure_ascii=False)
+            
             if usage:
                 await self.rate_limiter.update_usage(
                     tokens_used=usage.get('total_tokens', 0)
@@ -128,8 +149,8 @@ class OpenRouterClient(LoggerMixin):
         self,
         prompt: str,
         model: str,
-        max_tokens: int = 4000,
-        temperature: float = 0.1,
+        max_tokens: int = 102400,
+        temperature: float = 0.7,
         system_message: Optional[str] = None,
         **kwargs
     ) -> str:
@@ -447,6 +468,7 @@ CRITICAL REQUIREMENTS:
 13. Include proper error handling and meaningful test names
 14. Minimize test failures by ensuring proper data setup and teardown
 15. Follow Java naming conventions and best practices
+16. ALL @Test methods MUST explicitly declare a timeout of 60000 milliseconds using @Test(timeout = 60000)
 
 SETUP AND CLEANUP METHOD REQUIREMENTS:
 - Create a @Before method called setupTestData()
