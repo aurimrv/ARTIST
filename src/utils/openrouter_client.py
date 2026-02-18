@@ -390,13 +390,21 @@ CRITICAL: Return ONLY the corrected Java code that resolves all compilation erro
         system_message = """You are an expert test automation engineer specializing in fixing failing API 
         tests.\n\nYour core principles:\n- Analyze failure patterns to understand actual API behavior\n- 
         Prefer adapting expectations to reality over ignoring tests\n- Apply consistent fixes across similar 
-        test patterns\n- Provide working code that reflects actual API behavior\n\nStatus code flexibility 
+        test patterns\n- Provide working code that reflects actual API behavior. \n\nStatus code flexibility 
         guidelines:\n- Client errors (4xx): 400↔404↔405↔409 are interchangeable for invalid inputs\n- Server 
         errors (5xx): Accept 500/502/503 if consistently returned\n- Success codes: 200↔201↔204 acceptable 
-        based on operation type\n\nWhen changing expected status codes, add explanatory comments:\n// API 
-        returns {actual} instead of {expected} - {reason}\n\nUse @Ignore only for clearly unimplemented 
-        endpoints with specific reasons.\n\nIMPORTANT: Return ONLY the corrected Java code without any 
-        explanations or markdown formatting."""
+        based on operation type\n\nSTRICT CATEGORY RULE - Status code groupings must NEVER be mixed across 
+        categories (2xx, 4xx, 5xx) in a single anyOf() assertion. Always pick ONE category based on the 
+        observed API behavior:\n- If the API returns a client error → use only 4xx codes\n- If the API returns 
+        a server error → use only 5xx codes\n- If the API returns success → use only 2xx codes\n\nWhen the 
+        actual behavior is ambiguous, prefer the most restrictive and semantically correct category for the 
+        test scenario (e.g., invalid params → 4xx).\n\nExamples of INCORRECT usage:\n// WRONG: mixes 
+        categories\n.statusCode(anyOf(is(200), is(400), is(500)));\n\nExamples of CORRECT usage:\n// RIGHT: 
+        single category for invalid input\n.statusCode(anyOf(is(400), is(404), is(405)));\n// RIGHT: single 
+        category for server-side issues\n.statusCode(anyOf(is(500), is(502), is(503)));\n\nWhen changing 
+        expected status codes, add explanatory comments:\n// API returns {actual} instead of {expected} - 
+        {reason}\n\nUse @Ignore only for clearly unimplemented endpoints with specific reasons.\n\nIMPORTANT: 
+        Return ONLY the corrected Java code without any explanations or markdown formatting."""
         
         prompt = f"""Fix the test failures in the following Java test code. Analyze the failure patterns 
         and adapt the tests to match the actual API behavior:\n\nJava Test Code:
@@ -578,7 +586,7 @@ Please enhance the scenarios by:
 6. Considering authentication and authorization scenarios if applicable
 
 Maintain the same JSON format as the existing scenarios but with enhanced content."""
-        
+
         return await self.generate_text(
             prompt=prompt,
             model=model,

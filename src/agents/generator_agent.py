@@ -302,6 +302,8 @@ class GeneratorAgent(BaseAgent):
                 seed=self.get_seed()
             )
 
+            print(f"#### generator simple_test_class test_content:{test_content}")
+
             # Sanitize LLM output to remove commentary and extract only code
             if test_content:
                 self.logger.info(f"Sanitizing LLM output for {class_name}")

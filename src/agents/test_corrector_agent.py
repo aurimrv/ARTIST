@@ -762,6 +762,8 @@ class TestCorrectorAgent(BaseAgent):
                 temperature=self.get_temperature()
             )
             
+            print(f"#### corrector fix_with_llm corrected_content:{corrected_content}")
+
             # Sanitize LLM output to remove commentary and extract only code
             if corrected_content:
                 self.logger.info(f"Sanitizing LLM test correction output for {file_path}")

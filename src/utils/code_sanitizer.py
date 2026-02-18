@@ -29,7 +29,9 @@ class CodeSanitizer(LoggerMixin):
         try:
             # Extract code between triple backticks
             code = self._extract_code_blocks(llm_output)
-            
+
+            print(f"#### sanitizer llm_output:{llm_output}")
+
             if not code:
                 self.logger.warning("No code blocks found in LLM output, using fallback extraction")
                 code = self._fallback_code_extraction(llm_output)
@@ -80,7 +82,11 @@ class CodeSanitizer(LoggerMixin):
     def _fallback_code_extraction(self, text: str) -> str:
         """
         Fallback method to extract Java code when code blocks are not found.
-        
+
+        Finds the first Java anchor line (package, import, class declaration, annotation)
+        and collects every line from that point until the end, skipping only obvious
+        standalone commentary lines that appear *before* the code starts.
+
         Args:
             text: Text that might contain Java code
         
@@ -88,27 +94,115 @@ class CodeSanitizer(LoggerMixin):
             Best guess at Java code content
         """
         lines = text.split('\n')
+
+        # 1. Find where the Java code begins
+        start_index = None
+        for i, line in enumerate(lines):
+            if self._is_java_anchor_line(line):
+                start_index = i
+                break
+
+        if start_index is None:
+            # No clear Java anchor found — fall back to the original heuristic
+            self.logger.warning("No Java anchor line found in fallback extraction")
+            return self._heuristic_code_extraction(lines)
+
+        # 2. Collect all lines from the anchor onward, removing only
+        #    commentary lines that appear on their own (not inside the code body).
+        #    Once we are inside the class body (brace_depth > 0) we keep everything.
+        code_lines = []
+        brace_depth = 0
+        inside_body = False
+
+        for line in lines[start_index:]:
+            # Track brace depth to know when we are inside a class/method body
+            brace_depth += line.count('{') - line.count('}')
+            if brace_depth > 0:
+                inside_body = True
+
+            if not inside_body and self._is_commentary_line(line):
+                # Skip commentary that appears before the class body opens
+                continue
+
+            code_lines.append(line)
+
+            # If brace depth returns to 0 after we entered the body,
+            # the top-level class is closed — stop collecting.
+            if inside_body and brace_depth <= 0:
+                break
+
+        return '\n'.join(code_lines).strip()
+
+    def _is_java_anchor_line(self, line: str) -> bool:
+        """
+        Return True if the line is a strong Java anchor: package, import,
+        a class/interface declaration, or a top-level annotation.
+
+        Args:
+            line: Line to inspect
+
+        Returns:
+            True if the line is a reliable start-of-Java-code marker
+        """
+        stripped = line.strip()
+        anchor_patterns = [
+            r'^package\s+[\w.]+;',
+            r'^import\s+[\w.*]+;',
+            r'^(public\s+)?(abstract\s+)?class\s+\w+',
+            r'^(public\s+)?interface\s+\w+',
+            r'^(public\s+)?enum\s+\w+',
+            r'^@\w+',   # Top-level annotation
+        ]
+        for pattern in anchor_patterns:
+            if re.match(pattern, stripped):
+                return True
+        return False
+
+    def _heuristic_code_extraction(self, lines: list) -> str:
+        """
+        Original heuristic-based extraction used as a last resort.
+
+        The key fix over the original implementation is that we do NOT break
+        on non-Java-looking lines once we are inside the code — blank lines and
+        closing braces would previously terminate collection prematurely.
+
+        Args:
+            lines: Lines of the source text
+
+        Returns:
+            Extracted code string
+        """
         code_lines = []
         in_code = False
-        
+        consecutive_non_java = 0
+        MAX_CONSECUTIVE_NON_JAVA = 5  # tolerate up to 5 ambiguous lines
+
         for line in lines:
-            # Skip obvious commentary lines
             if self._is_commentary_line(line):
+                if in_code:
+                    consecutive_non_java += 1
+                    if consecutive_non_java > MAX_CONSECUTIVE_NON_JAVA:
+                        break
+                    code_lines.append(line)
                 continue
-            
-            # Look for Java code indicators
+
             if self._looks_like_java_line(line):
                 in_code = True
+                consecutive_non_java = 0
                 code_lines.append(line)
-            elif in_code and (line.strip() == '' or line.startswith(' ') or line.startswith('\t')):
-                # Continue collecting if we're in code and line is indented or empty
-                code_lines.append(line)
-            elif in_code and not self._looks_like_java_line(line):
-                # Stop if we hit non-Java content
-                break
-        
+            elif in_code:
+                # Inside code: keep blank / indented lines, tolerate ambiguous ones
+                if line.strip() == '' or line.startswith(' ') or line.startswith('\t') or line.strip() == '}':
+                    consecutive_non_java = 0
+                    code_lines.append(line)
+                else:
+                    consecutive_non_java += 1
+                    if consecutive_non_java > MAX_CONSECUTIVE_NON_JAVA:
+                        break
+                    code_lines.append(line)
+
         return '\n'.join(code_lines).strip()
-    
+
     def _clean_java_code(self, code: str) -> str:
         """
         Clean Java code by removing unwanted elements.
@@ -148,10 +242,16 @@ class CodeSanitizer(LoggerMixin):
         Returns:
             True if line appears to be commentary
         """
-        line = line.strip().lower()
+        stripped = line.strip()
+        lower = stripped.lower()
         
-        # Skip empty lines
-        if not line:
+        # Keep empty lines — they are part of code formatting
+        if not stripped:
+            return False
+
+        # Never treat lines that look like Java constructs as commentary,
+        # even if they happen to match a commentary pattern superficially.
+        if self._looks_like_java_line(line):
             return False
         
         # LLM commentary patterns
@@ -163,15 +263,15 @@ class CodeSanitizer(LoggerMixin):
             r'^note:',
             r'^important:',
             r'^\d+\.',  # Numbered lists
-            r'^-',      # Bullet points
-            r'^\*',     # Asterisk bullet points
+            r'^-\s',    # Bullet points (dash + space, to avoid matching -> or --)
+            r'^\*\s',   # Asterisk bullet points (with space)
             r'^###',    # Markdown headers
             r'^##',
-            r'^#',
+            r'^#(?!\s*!)',  # Markdown H1, but not shebang lines
         ]
         
         for pattern in commentary_patterns:
-            if re.match(pattern, line):
+            if re.match(pattern, lower):
                 return True
         
         return False
@@ -191,7 +291,7 @@ class CodeSanitizer(LoggerMixin):
         # Java code indicators
         java_patterns = [
             r'^package\s+[\w.]+;',
-            r'^import\s+[\w.]+;',
+            r'^import\s+[\w.*]+;',
             r'^public\s+class\s+\w+',
             r'^class\s+\w+',
             r'^@\w+',  # Annotations
@@ -239,9 +339,6 @@ class CodeSanitizer(LoggerMixin):
         Returns:
             Line with LLM comments removed
         """
-        # This is a simple implementation - could be enhanced
-        # For now, just return the line as-is since most LLM comments
-        # are on separate lines
         return line
     
     def _validate_java_code_structure(self, code: str) -> bool:
@@ -285,30 +382,20 @@ class CodeSanitizer(LoggerMixin):
         elif file_path.suffix == '.xml':
             return self._sanitize_xml_content(content)
         else:
-            # For other file types, just remove obvious LLM commentary
             return self._remove_llm_commentary(content)
     
     def _sanitize_xml_content(self, content: str) -> str:
         """
         Sanitize XML content from LLM output.
-        
-        Args:
-            content: Raw XML content
-        
-        Returns:
-            Clean XML content
         """
-        # Extract XML from code blocks if present
         xml_match = re.search(r'```xml\s*\n(.*?)\n```', content, re.DOTALL)
         if xml_match:
             return xml_match.group(1).strip()
         
-        # Extract XML from generic code blocks
         code_match = re.search(r'```\s*\n(.*?)\n```', content, re.DOTALL)
         if code_match and '<' in code_match.group(1):
             return code_match.group(1).strip()
         
-        # If no code blocks, try to extract XML content
         lines = content.split('\n')
         xml_lines = []
         in_xml = False
@@ -327,12 +414,6 @@ class CodeSanitizer(LoggerMixin):
     def _remove_llm_commentary(self, content: str) -> str:
         """
         Remove LLM commentary from generic content.
-        
-        Args:
-            content: Content to clean
-        
-        Returns:
-            Content with commentary removed
         """
         lines = content.split('\n')
         cleaned_lines = []
@@ -342,4 +423,3 @@ class CodeSanitizer(LoggerMixin):
                 cleaned_lines.append(line)
         
         return '\n'.join(cleaned_lines).strip()
-
