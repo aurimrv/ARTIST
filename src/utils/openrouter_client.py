@@ -543,49 +543,34 @@ CRITICAL: Return ONLY the complete Java class code. Do NOT include any explanati
 
     async def generate_enhanced_test_scenarios(
         self,
-        api_spec: str,
-        implementation_info: str,
-        existing_scenarios: str,
+        prompt: str,
         model: str,
         **kwargs
     ) -> str:
         """
-        Generate enhanced test scenarios with LLM analysis.
-        
+        Generate enhanced test scenarios with LLM analysis using the
+        caller-supplied prompt.
+
+        The prompt is built by ``PlannerAgent._build_enhancement_prompt``
+        and already contains the full API context, the existing scenarios,
+        and a strict JSON output format instruction.  Delegating prompt
+        construction to the caller avoids the mismatch between the generic
+        prompt previously used here and the structured JSON format that
+        ``PlannerAgent._parse_llm_response`` expects.
+
         Args:
-            api_spec: API specification content
-            implementation_info: Implementation analysis
-            existing_scenarios: Existing scenarios to enhance
-            model: Model name to use
-            **kwargs: Additional parameters
-        
+            prompt: Complete prompt string produced by the PlannerAgent.
+            model: Model name to use.
+            **kwargs: Additional parameters forwarded to ``generate_text``.
+
         Returns:
-            Enhanced test scenarios
+            Raw LLM response string (JSON expected).
         """
-        system_message = """You are an expert test architect specializing in REST API testing.
-Your task is to enhance existing test scenarios by adding more comprehensive test cases,
-improving test data, and ensuring better coverage of edge cases and error conditions."""
-        
-        prompt = f"""Enhance the following test scenarios based on the API specification and implementation analysis.
-
-API Specification:
-{api_spec}
-
-Implementation Analysis:
-{implementation_info}
-
-Existing Scenarios:
-{existing_scenarios}
-
-Please enhance the scenarios by:
-1. Adding missing edge cases and boundary conditions
-2. Improving test data to be more realistic and comprehensive
-3. Adding more negative test cases for error conditions
-4. Ensuring proper parameter validation tests
-5. Adding tests for different content types and response formats
-6. Considering authentication and authorization scenarios if applicable
-
-Maintain the same JSON format as the existing scenarios but with enhanced content."""
+        system_message = (
+            "You are an expert test architect specializing in REST API testing. "
+            "Return ONLY valid JSON as instructed in the user prompt – "
+            "no prose, no markdown fences, no extra keys."
+        )
 
         return await self.generate_text(
             prompt=prompt,

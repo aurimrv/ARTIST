@@ -3,6 +3,7 @@ Planner Agent for analyzing APIs and creating test scenarios.
 """
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -665,12 +666,10 @@ class PlannerAgent(BaseAgent):
         """Enhance scenarios using LLM analysis."""
         try:
             context = self._prepare_llm_context(scenarios, api_spec, base_url)
-            prompt = self._build_enhancement_prompt(context)  # noqa: F841 – kept for clarity
+            prompt = self._build_enhancement_prompt(context)
 
             response = await self.openrouter_client.generate_enhanced_test_scenarios(
-                api_spec=api_spec,
-                implementation_info=base_url,
-                existing_scenarios=context,
+                prompt=prompt,
                 model=self.get_model_name(),
                 max_tokens=self.get_max_tokens(),
                 temperature=self.get_temperature(),
@@ -776,15 +775,105 @@ Focus on creating realistic, executable test scenarios that follow proper API us
 """
 
     def _parse_llm_response(self, content: str) -> Optional[Dict[str, Any]]:
-        """Parse LLM response."""
+        """
+        Parse LLM response using multiple fallback strategies to handle
+        common LLM output issues such as markdown code fences, surrounding
+        prose, and unescaped double-quotes inside JSON string values.
+        """
         try:
             content = content.strip()
-            if content.startswith('```json'):
-                content = content.replace('```json', '').replace('```', '').strip()
-            return json.loads(content)
+
+            # Strategy 1: strip markdown code fences (```json...``` or ```...```)
+            code_block_pattern = r'^```(?:json)?\s*\n?(.*?)\n?```\s*$'
+            match = re.match(code_block_pattern, content, re.DOTALL)
+            if match:
+                content = match.group(1).strip()
+
+            # Strategy 2: direct parse
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError:
+                pass
+
+            # Strategy 3: extract the outermost JSON object with regex
+            json_match = re.search(r'\{[\s\S]*\}', content)
+            if json_match:
+                try:
+                    return json.loads(json_match.group())
+                except json.JSONDecodeError:
+                    pass
+
+            # Strategy 4: fix unescaped double-quotes inside JSON string values
+            # (the root cause of 'Expecting comma delimiter' errors from LLMs)
+            try:
+                fixed = self._fix_unescaped_quotes(content)
+                return json.loads(fixed)
+            except (json.JSONDecodeError, Exception):
+                pass
+
+            # Strategy 5: combine regex extraction + quote fixing
+            if json_match:
+                try:
+                    fixed = self._fix_unescaped_quotes(json_match.group())
+                    return json.loads(fixed)
+                except (json.JSONDecodeError, Exception):
+                    pass
+
+            self.logger.error(
+                "Could not parse LLM response after all recovery strategies"
+            )
+            return None
+
         except Exception as e:
             self.logger.error(f"Error parsing LLM response: {e}")
             return None
+
+    @staticmethod
+    def _fix_unescaped_quotes(content: str) -> str:
+        """
+        Attempt to fix unescaped double-quotes inside JSON string values.
+
+        Walks the content character-by-character, tracking whether the
+        parser is currently inside a JSON string.  When a double-quote is
+        encountered while inside a string, the method looks ahead to decide
+        whether it is a legitimate closing quote (followed by a JSON
+        structural character: colon, comma, closing brace/bracket) or an
+        unescaped interior quote that must be escaped.
+
+        This handles the most common LLM failure mode that produces the
+        ``Expecting ',' delimiter`` JSON decode error.
+        """
+        result: list = []
+        in_string = False
+        i = 0
+        while i < len(content):
+            char = content[i]
+            # Preserve already-escaped sequences intact
+            if char == '\\' and i + 1 < len(content):
+                result.append(char)
+                result.append(content[i + 1])
+                i += 2
+                continue
+            if char == '"':
+                if not in_string:
+                    in_string = True
+                    result.append(char)
+                else:
+                    # Look ahead past whitespace to find the next structural char
+                    j = i + 1
+                    while j < len(content) and content[j] in ' \t\n\r':
+                        j += 1
+                    if j >= len(content) or content[j] in ':,}]':
+                        # Legitimate closing quote
+                        in_string = False
+                        result.append(char)
+                    else:
+                        # Interior unescaped quote – escape it
+                        result.append('\\"')
+            else:
+                result.append(char)
+            i += 1
+        return ''.join(result)
 
     def _create_enhanced_scenarios(
         self,
