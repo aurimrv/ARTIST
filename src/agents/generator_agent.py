@@ -322,26 +322,48 @@ class GeneratorAgent(BaseAgent):
             return None
     
     def _format_scenarios_for_llm(self, scenarios: List[TestScenario]) -> str:
-        """Format test scenarios for LLM consumption."""
-        scenarios_text = "Test Scenarios:\n\n"
-        
+        """Format test scenarios for LLM consumption with explicit coverage requirements."""
+        total = len(scenarios)
+        positive = sum(1 for s in scenarios if not s.is_negative_test)
+        negative = sum(1 for s in scenarios if s.is_negative_test)
+
+        scenarios_text = (
+            f"MANDATORY TEST COVERAGE REQUIREMENT:\n"
+            f"You MUST generate AT LEAST {total} @Test methods in total.\n"
+            f"There are {total} scenarios below ({positive} positive, {negative} negative).\n"
+            f"Each scenario MUST produce at least one dedicated @Test method.\n"
+            f"You are STRONGLY ENCOURAGED to generate MORE than {total} @Test methods by:\n"
+            f"  - Adding boundary-value tests (min, max, zero, empty, null) for each parameter\n"
+            f"  - Adding data-type validation tests (non-numeric, special characters, very long strings)\n"
+            f"  - Adding combined-parameter tests where multiple parameters interact\n"
+            f"  - Splitting complex scenarios into multiple focused test methods\n"
+            f"NEVER merge, skip, or omit any of the {total} scenarios listed below.\n\n"
+            f"Test Scenarios ({total} total):\n\n"
+        )
+
         for i, scenario in enumerate(scenarios, 1):
-            scenarios_text += f"Scenario {i}:\n"
+            scenarios_text += f"Scenario {i}/{total}:\n"
             scenarios_text += f"- Name: {scenario.name}\n"
             scenarios_text += f"- Description: {scenario.description}\n"
             scenarios_text += f"- Method: {scenario.method}\n"
             scenarios_text += f"- Endpoint: {scenario.endpoint}\n"
             scenarios_text += f"- Expected Status: {scenario.expected_status}\n"
             scenarios_text += f"- Is Negative Test: {scenario.is_negative_test}\n"
-            
+
             if scenario.parameters:
                 scenarios_text += f"- Parameters: {scenario.parameters}\n"
-            
+
             if scenario.test_data:
                 scenarios_text += f"- Test Data: {scenario.test_data}\n"
-            
+
             scenarios_text += "\n"
-        
+
+        scenarios_text += (
+            f"FINAL REMINDER: The generated class MUST contain at least {total} @Test methods "
+            f"(one per scenario above). Aim for significantly more by exploring boundary values "
+            f"and parameter combinations for each endpoint.\n"
+        )
+
         return scenarios_text
 
     def _format_openapi_context_for_llm(self, context: ProjectContext) -> str:

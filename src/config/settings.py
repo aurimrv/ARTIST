@@ -108,17 +108,28 @@ class Settings:
         
         agent_names = ['planner', 'generator', 'compiler_corrector', 'test_corrector']
         
+        # Global seed: used as fallback when no agent-specific seed is set
+        global_seed_str = self._get_env('SEED')
+        global_seed = self._get_env_int('SEED', None) if global_seed_str else None
+
         for agent_name in agent_names:
             model_key = f'{agent_name.upper()}_MODEL'
             model = self._get_env(model_key, default_model)
-            
+
+            # Agent-specific seed takes precedence over global SEED
+            agent_seed_str = self._get_env(f'{agent_name.upper()}_SEED')
+            if agent_seed_str:
+                seed = self._get_env_int(f'{agent_name.upper()}_SEED', None)
+            else:
+                seed = global_seed
+
             agents[agent_name] = AgentConfig(
                 name=agent_name,
                 model=model,
                 max_tokens=self._get_env_int(f'{agent_name.upper()}_MAX_TOKENS', 102400),
                 temperature=self._get_env_float(f'{agent_name.upper()}_TEMPERATURE', 0.7),
                 timeout=self._get_env_int(f'{agent_name.upper()}_TIMEOUT', 60),
-                seed=self._get_env_int(f'{agent_name.upper()}_SEED', None) if self._get_env(f'{agent_name.upper()}_SEED') else None
+                seed=seed
             )
         
         return agents

@@ -88,11 +88,18 @@ class OpenRouterClient(LoggerMixin):
             'stream': stream,
             **kwargs
         }
-        
+
+        # Inject seed for reproducibility if provided via kwargs
+        # (seed is passed via **kwargs from generate_text -> generate_test_code_with_full_context)
+        if 'seed' in payload and payload['seed'] is None:
+            del payload['seed']
+
         print("### funcao chat_completion")
         print(f"#### Model: {payload['model']}")
         print(f"#### Max_Tokens: {payload['max_tokens']}")
         print(f"#### Temperature: {payload['temperature']}")
+        if 'seed' in payload:
+            print(f"#### Seed: {payload['seed']}")
         # print(f"#### Message: {payload['messages']}")
 
         self.logger.debug(f"Making chat completion request with model: {model}")
@@ -451,6 +458,13 @@ CRITICAL: Return ONLY the corrected Java test code that resolves the test failur
         system_message = """You are an expert Java developer specializing in test automation.
 Your task is to generate JUnit 4 test code using Rest Assured for API integration testing.
 Follow best practices for test organization, naming, and assertions.
+
+CRITICAL COVERAGE RULE: You MUST generate AT LEAST as many @Test methods as there are
+scenarios provided. Each scenario listed in the user prompt MUST have its own dedicated
+@Test method. Do NOT merge multiple scenarios into a single @Test method.
+Beyond the mandatory minimum, you are expected to ADD extra @Test methods that explore
+boundary values, edge cases, and parameter combinations not explicitly listed.
+
 IMPORTANT: Return ONLY the Java code without any explanations, comments, or markdown formatting."""
         
         # Format project context
@@ -477,6 +491,8 @@ CRITICAL REQUIREMENTS:
 14. Minimize test failures by ensuring proper data setup and teardown
 15. Follow Java naming conventions and best practices
 16. ALL @Test methods MUST explicitly declare a timeout of 60000 milliseconds using @Test(timeout = 60000)
+17. MANDATORY COVERAGE: Generate ONE @Test method per scenario. NEVER merge two scenarios into one @Test method. Each scenario in the list MUST map to exactly one (or more) @Test method(s).
+18. EXPAND COVERAGE: After implementing the mandatory @Test methods, add ADDITIONAL @Test methods for boundary values (e.g., zero, negative, maximum, empty string, null) and parameter combinations not listed in the scenarios.
 
 SETUP AND CLEANUP METHOD REQUIREMENTS:
 - Create a @Before method called setupTestData()
@@ -526,11 +542,25 @@ ERROR HANDLING AND RESPONSE VALIDATION:
 - Use assumeTrue() for test preconditions
 - Handle network timeouts and connection issues gracefully
 """        
+        # Extract the mandatory minimum count from scenarios_context header if present
+        import re as _re
+        _min_match = _re.search(r'AT LEAST (\d+) @Test methods', scenarios_context)
+        min_tests_reminder = ""
+        if _min_match:
+            min_count = _min_match.group(1)
+            min_tests_reminder = (
+                f"\nFINAL MANDATORY CHECK: Before returning, count the @Test methods in your code. "
+                f"There MUST be at least {min_count} @Test methods — one for EACH scenario listed above. "
+                f"If any scenario is missing a @Test method, add it now. "
+                f"Aim for more than {min_count} by adding boundary-value and edge-case tests."
+            )
+
         prompt = f"""{project_context_str}
 
 {openapi_context}
 
 {scenarios_context}
+{min_tests_reminder}
 
 CRITICAL: Return ONLY the complete Java class code. Do NOT include any explanations, descriptions, or markdown code blocks. Start directly with the package declaration or imports."""
         
