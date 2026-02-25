@@ -144,7 +144,6 @@ class PlannerAgent(BaseAgent):
 
     # ===========================================================
     # DEBUG: Salva snapshots de cenários em ./llm_interactions
-    # Pode ser removido futuramente apagando este método e suas chamadas.
     # ===========================================================
     def _save_scenarios_snapshot(self, stage: str, scenarios: List) -> None:
         """Save a JSON snapshot of scenarios at a given pipeline stage."""
@@ -232,8 +231,26 @@ class PlannerAgent(BaseAgent):
                     scenarios, api_spec, base_url
                 )
                 if enhanced_scenarios:
-                    scenarios = enhanced_scenarios
-                    self.logger.info("Enhanced scenarios with LLM analysis")
+                    # FIX #5: If LLM returns fewer scenarios than the original set,
+                    # fall back to the original rather than silently losing coverage.
+                    if len(enhanced_scenarios) < len(scenarios):
+                        self.logger.warning(
+                            f"LLM enhancement reduced scenario count from {len(scenarios)} to "
+                            f"{len(enhanced_scenarios)}. Falling back to original scenarios to "
+                            f"preserve maximum coverage."
+                        )
+                        # Keep the original scenarios but do NOT discard the LLM output completely;
+                        # merge them so we get both the original deterministic set and any new LLM
+                        # scenarios that were not already present.
+                        merged = self._merge_scenarios(scenarios, enhanced_scenarios)
+                        scenarios = merged
+                        self.logger.info(
+                            f"Merged scenarios: {len(scenarios)} total after combining "
+                            f"original + LLM-enhanced sets."
+                        )
+                    else:
+                        scenarios = enhanced_scenarios
+                        self.logger.info("Enhanced scenarios with LLM analysis")
 
             # ===========================================================
             # DEBUG: Snapshot 3 – cenários após enriquecimento com LLM
@@ -698,12 +715,51 @@ class PlannerAgent(BaseAgent):
         seen_signatures: set = set()
 
         for scenario in scenarios:
-            signature = (scenario.method,scenario.endpoint,scenario.is_negative_test,scenario.expected_status)
+            signature = (scenario.method, scenario.endpoint, scenario.is_negative_test, scenario.expected_status)
             if signature not in seen_signatures:
                 unique_scenarios.append(scenario)
                 seen_signatures.add(signature)
 
         return unique_scenarios
+
+    # ------------------------------------------------------------------
+    # Scenario merging (FIX #5 support)
+    # ------------------------------------------------------------------
+
+    def _merge_scenarios(
+        self,
+        original: List[TestScenario],
+        enhanced: List[TestScenario],
+    ) -> List[TestScenario]:
+        """
+        Merge original and LLM-enhanced scenario lists.
+
+        Strategy:
+        - Start with all original scenarios (guarantees baseline coverage).
+        - Append any enhanced scenario whose signature is not already present
+          (brings in genuinely new LLM-generated scenarios).
+        - The result is deduplicated to avoid exact duplicates.
+
+        Args:
+            original: The deterministically generated scenario list.
+            enhanced: The LLM-enhanced scenario list (may be smaller).
+
+        Returns:
+            Merged, deduplicated list with at least as many entries as *original*.
+        """
+        merged = list(original)
+        seen_signatures: set = {
+            (s.method, s.endpoint, s.is_negative_test, s.expected_status)
+            for s in original
+        }
+
+        for scenario in enhanced:
+            sig = (scenario.method, scenario.endpoint, scenario.is_negative_test, scenario.expected_status)
+            if sig not in seen_signatures:
+                merged.append(scenario)
+                seen_signatures.add(sig)
+
+        return merged
 
     # ------------------------------------------------------------------
     # LLM enhancement
@@ -720,11 +776,14 @@ class PlannerAgent(BaseAgent):
             context = self._prepare_llm_context(scenarios, api_spec, base_url)
             prompt = self._build_enhancement_prompt(context)
 
+            # FIX #4: Pass scenario_count so the OpenRouterClient can embed
+            # the minimum-count enforcement into its system message.
             response = await self.openrouter_client.generate_enhanced_test_scenarios(
                 prompt=prompt,
                 model=self.get_model_name(),
                 max_tokens=self.get_max_tokens(),
                 temperature=self.get_temperature(),
+                scenario_count=len(scenarios),
             )
 
             if response:
@@ -776,6 +835,7 @@ class PlannerAgent(BaseAgent):
     @staticmethod
     def _build_enhancement_prompt(context: Dict[str, Any]) -> str:
         """Build prompt for LLM scenario enhancement."""
+        scenario_count = len(context.get('current_scenarios', []))
         return f"""
 You are an expert API testing specialist. Analyze the following API specification and test scenarios to improve them.
 
@@ -787,7 +847,7 @@ API Information:
 API Endpoints (with declared response codes):
 {json.dumps(context['api_endpoints'], indent=2)}
 
-Current Test Scenarios:
+Current Test Scenarios ({scenario_count} scenarios – you MUST preserve all of them):
 {json.dumps(context['current_scenarios'], indent=2)}
 
 Your task is to:
@@ -801,11 +861,16 @@ Your task is to:
    - Only include 5xx scenarios when explicitly declared in the spec
 6. Add dependency information between scenarios
 7. Improve scenario descriptions
+8. Replace generic placeholder values (e.g. "test-value") with domain-realistic values
+   appropriate to the endpoint semantics
 
 Rules:
 - Endpoints must start with valid paths (never with bare path parameters like /{{param}})
 - Use consistent parameter values across related scenarios
 - Do NOT invent status codes not present in the spec responses
+- The output enhanced_scenarios array MUST contain AT LEAST {scenario_count} entries
+- You MUST include an improved version of every input scenario
+- You MAY add new scenarios beyond the {scenario_count} minimum
 
 Return ONLY a JSON object with this structure:
 {{

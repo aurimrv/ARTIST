@@ -100,7 +100,6 @@ class OpenRouterClient(LoggerMixin):
         print(f"#### Temperature: {payload['temperature']}")
         if 'seed' in payload:
             print(f"#### Seed: {payload['seed']}")
-        # print(f"#### Message: {payload['messages']}")
 
         self.logger.debug(f"Making chat completion request with model: {model}")
         
@@ -402,6 +401,7 @@ CRITICAL: Return ONLY the corrected Java code that resolves all compilation erro
         code: str,
         failures: str,
         model: str,
+        scenario_count: int = 0,
         **kwargs
     ) -> str:
         """
@@ -411,42 +411,79 @@ CRITICAL: Return ONLY the corrected Java code that resolves all compilation erro
             code: Java test code with failures
             failures: Test failure messages
             model: Model name to use
+            scenario_count: Number of original scenarios (used to enforce minimum @Test count)
             **kwargs: Additional parameters
         
         Returns:
             Fixed Java test code
         """
-        system_message = """You are an expert test automation engineer specializing in fixing failing API 
-        tests.\n\nYour core principles:\n- Analyze failure patterns to understand actual API behavior\n- 
-        Prefer adapting expectations to reality over ignoring tests\n- Apply consistent fixes across similar 
-        test patterns\n- Provide working code that reflects actual API behavior. \n\nStatus code flexibility 
-        guidelines:\n- Client errors (4xx): 400↔404↔405↔409 are interchangeable for invalid inputs\n- Server 
-        errors (5xx): Accept 500/502/503 if consistently returned\n- Success codes: 200↔201↔204 acceptable 
-        based on operation type\n\nSTRICT CATEGORY RULE - Status code groupings must NEVER be mixed across 
-        categories (2xx, 4xx, 5xx) in a single anyOf() assertion. Always pick ONE category based on the 
-        observed API behavior:\n- If the API returns a client error → use only 4xx codes\n- If the API returns 
-        a server error → use only 5xx codes\n- If the API returns success → use only 2xx codes\n\nWhen the 
-        actual behavior is ambiguous, prefer the most restrictive and semantically correct category for the 
-        test scenario (e.g., invalid params → 4xx).\n\nExamples of INCORRECT usage:\n// WRONG: mixes 
-        categories\n.statusCode(anyOf(is(200), is(400), is(500)));\n\nExamples of CORRECT usage:\n// RIGHT: 
-        single category for invalid input\n.statusCode(anyOf(is(400), is(404), is(405)));\n// RIGHT: single 
-        category for server-side issues\n.statusCode(anyOf(is(500), is(502), is(503)));\n\nWhen changing 
-        expected status codes, add explanatory comments:\n// API returns {actual} instead of {expected} - 
-        {reason}\n\nUse @Ignore only for clearly unimplemented endpoints with specific reasons.\n\nIMPORTANT: 
-        Return ONLY the corrected Java code without any explanations or markdown formatting."""
+        # FIX #1: Compute the current @Test count from the code so the LLM knows the baseline
+        import re as _re
+        current_test_count = len(_re.findall(r'@Test', code))
+
+        # FIX #2: Build a minimum-test guard string when scenario_count is known
+        min_tests_clause = ""
+        if scenario_count > 0:
+            min_tests_clause = (
+                f"\n\nMINIMUM TEST COUNT ENFORCEMENT:\n"
+                f"The original generation produced {current_test_count} @Test methods.\n"
+                f"There were {scenario_count} scenarios, so at least {scenario_count} @Test methods "
+                f"are mandatory. You MUST NOT reduce the total number of @Test methods below "
+                f"{current_test_count}. If you remove a test that cannot be fixed, replace it with "
+                f"an @Ignore-annotated stub that still counts as a test method, using a clear "
+                f"reason comment explaining why it is ignored.\n"
+            )
+
+        system_message = (
+            "You are an expert test automation engineer specializing in fixing failing API tests.\n\n"
+            "Your core principles:\n"
+            "- Analyze failure patterns to understand actual API behavior\n"
+            "- Prefer adapting expectations to reality over ignoring tests\n"
+            "- Apply consistent fixes across similar test patterns\n"
+            "- Provide working code that reflects actual API behavior.\n\n"
+            "Status code flexibility guidelines:\n"
+            "- Client errors (4xx): 400↔404↔405↔409 are interchangeable for invalid inputs\n"
+            "- Server errors (5xx): Accept 500/502/503 if consistently returned\n"
+            "- Success codes: 200↔201↔204 acceptable based on operation type\n\n"
+            "STRICT CATEGORY RULE - Status code groupings must NEVER be mixed across categories "
+            "(2xx, 4xx, 5xx) in a single anyOf() assertion. Always pick ONE category based on the "
+            "observed API behavior:\n"
+            "- If the API returns a client error → use only 4xx codes\n"
+            "- If the API returns a server error → use only 5xx codes\n"
+            "- If the API returns success → use only 2xx codes\n\n"
+            "When the actual behavior is ambiguous, prefer the most restrictive and semantically "
+            "correct category for the test scenario (e.g., invalid params → 4xx).\n\n"
+            "Examples of INCORRECT usage:\n"
+            "// WRONG: mixes categories\n"
+            ".statusCode(anyOf(is(200), is(400), is(500)));\n\n"
+            "Examples of CORRECT usage:\n"
+            "// RIGHT: single category for invalid input\n"
+            ".statusCode(anyOf(is(400), is(404), is(405)));\n"
+            "// RIGHT: single category for server-side issues\n"
+            ".statusCode(anyOf(is(500), is(502), is(503)));\n\n"
+            "When changing expected status codes, add explanatory comments:\n"
+            "// API returns {actual} instead of {expected} - {reason}\n\n"
+            "Use @Ignore only for clearly unimplemented endpoints with specific reasons.\n\n"
+            # FIX #3: Explicit instruction to never drop @Test methods during correction
+            "CRITICAL TEST COUNT RULE: You MUST preserve or increase the total number of @Test "
+            "methods. NEVER remove a @Test method. If a test cannot be made to pass reliably, "
+            "annotate it with @Ignore(\"reason\") but keep the method in the class.\n\n"
+            "IMPORTANT: Return ONLY the corrected Java code without any explanations or markdown formatting."
+        )
         
-        prompt = f"""Fix the test failures in the following Java test code. Analyze the failure patterns 
-        and adapt the tests to match the actual API behavior:\n\nJava Test Code:
-```java
-{code}
-```
-
-Test Failures:
-{failures}
-
-Apply consistent fixes across similar failures and ensure the corrected tests will pass reliably against the actual API implementation.
-
-CRITICAL: Return ONLY the corrected Java test code that resolves the test failures. Do NOT include any explanations, descriptions, or markdown code blocks. If a test cannot be fixed reliably, add @Ignore annotation with a clear reason."""
+        prompt = (
+            f"Fix the test failures in the following Java test code. Analyze the failure patterns\n"
+            f"and adapt the tests to match the actual API behavior:\n\n"
+            f"Java Test Code:\n```java\n{code}\n```\n\n"
+            f"Test Failures:\n{failures}\n"
+            f"{min_tests_clause}\n"
+            "Apply consistent fixes across similar failures and ensure the corrected tests will "
+            "pass reliably against the actual API implementation.\n\n"
+            "CRITICAL: Return ONLY the corrected Java test code that resolves the test failures. "
+            "Do NOT include any explanations, descriptions, or markdown code blocks. "
+            "If a test cannot be fixed reliably, add @Ignore annotation with a clear reason "
+            "but KEEP THE METHOD in the class."
+        )
 
         kwargs.setdefault("_operation_label", "fix_execution")
         return await self.generate_text(
@@ -599,6 +636,7 @@ CRITICAL: Return ONLY the complete Java class code. Do NOT include any explanati
         self,
         prompt: str,
         model: str,
+        scenario_count: int = 0,
         **kwargs
     ) -> str:
         """
@@ -607,23 +645,34 @@ CRITICAL: Return ONLY the complete Java class code. Do NOT include any explanati
 
         The prompt is built by ``PlannerAgent._build_enhancement_prompt``
         and already contains the full API context, the existing scenarios,
-        and a strict JSON output format instruction.  Delegating prompt
-        construction to the caller avoids the mismatch between the generic
-        prompt previously used here and the structured JSON format that
-        ``PlannerAgent._parse_llm_response`` expects.
+        and a strict JSON output format instruction.
 
         Args:
             prompt: Complete prompt string produced by the PlannerAgent.
             model: Model name to use.
+            scenario_count: Number of input scenarios; used to enforce minimum
+                            output count in the system message.
             **kwargs: Additional parameters forwarded to ``generate_text``.
 
         Returns:
             Raw LLM response string (JSON expected).
         """
+        # FIX #4: Embed the input scenario count in the system prompt so the
+        # model cannot silently reduce the scenario set during enhancement.
+        min_count_instruction = ""
+        if scenario_count > 0:
+            min_count_instruction = (
+                f"\n\nCRITICAL SCENARIO COUNT RULE: The input contains {scenario_count} scenarios. "
+                f"Your enhanced_scenarios array MUST contain AT LEAST {scenario_count} entries. "
+                f"You may ADD new scenarios, but you must NEVER drop or merge existing ones. "
+                f"Each original scenario must appear (possibly improved) in the output."
+            )
+
         system_message = (
             "You are an expert test architect specializing in REST API testing. "
             "Return ONLY valid JSON as instructed in the user prompt – "
             "no prose, no markdown fences, no extra keys."
+            + min_count_instruction
         )
 
         kwargs.setdefault("_operation_label", "enhance_scenarios")
