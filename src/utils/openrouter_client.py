@@ -187,7 +187,28 @@ class OpenRouterClient(LoggerMixin):
             'role': 'user',
             'content': prompt
         })
-        
+
+        # ===========================================================
+        # DEBUG: Salva prompts enviados ao LLM em ./llm_interactions
+        # Pode ser removido futuramente apagando este bloco inteiro.
+        # ===========================================================
+        try:
+            os.makedirs("./llm_interactions", exist_ok=True)
+            _ts = datetime.now().strftime("%Y%m%d%H%M%S%f")[:-3]
+            _op_label = kwargs.pop("_operation_label", "unknown")
+            _prompt_filename = f"./llm_interactions/{_ts}_{_op_label}_prompt.json"
+            _prompt_data = {
+                "operation": _op_label,
+                "model": model,
+                "system_prompt": system_message,
+                "user_prompt": prompt,
+            }
+            with open(_prompt_filename, "w", encoding="utf-8") as _pf:
+                json.dump(_prompt_data, _pf, indent=2, ensure_ascii=False)
+        except Exception as _e:
+            self.logger.warning(f"Failed to save prompt log: {_e}")
+        # ===========================================================
+
         response = await self.chat_completion(
             messages=messages,
             model=model,
@@ -368,6 +389,7 @@ WHAT NOT TO CHANGE:
 
 CRITICAL: Return ONLY the corrected Java code that resolves all compilation errors. Do NOT include any explanations, descriptions, or markdown code blocks. Maintain the original functionality and test logic while fixing ONLY syntax and import issues."""
         
+        kwargs.setdefault("_operation_label", "fix_compilation")
         return await self.generate_text(
             prompt=prompt,
             model=model,
@@ -426,6 +448,7 @@ Apply consistent fixes across similar failures and ensure the corrected tests wi
 
 CRITICAL: Return ONLY the corrected Java test code that resolves the test failures. Do NOT include any explanations, descriptions, or markdown code blocks. If a test cannot be fixed reliably, add @Ignore annotation with a clear reason."""
 
+        kwargs.setdefault("_operation_label", "fix_execution")
         return await self.generate_text(
             prompt=prompt,
             model=model,
@@ -564,6 +587,7 @@ ERROR HANDLING AND RESPONSE VALIDATION:
 
 CRITICAL: Return ONLY the complete Java class code. Do NOT include any explanations, descriptions, or markdown code blocks. Start directly with the package declaration or imports."""
         
+        kwargs.setdefault("_operation_label", "generate_tests")
         return await self.generate_text(
             prompt=prompt,
             model=model,
@@ -602,6 +626,7 @@ CRITICAL: Return ONLY the complete Java class code. Do NOT include any explanati
             "no prose, no markdown fences, no extra keys."
         )
 
+        kwargs.setdefault("_operation_label", "enhance_scenarios")
         return await self.generate_text(
             prompt=prompt,
             model=model,
@@ -631,4 +656,3 @@ CRITICAL: Return ONLY the complete Java class code. Do NOT include any explanati
         except requests.RequestException as e:
             self.logger.error(f"Failed to get available models: {e}")
             return []
-

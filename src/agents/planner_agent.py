@@ -3,7 +3,9 @@ Planner Agent for analyzing APIs and creating test scenarios.
 """
 
 import json
+import os
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -140,6 +142,40 @@ class PlannerAgent(BaseAgent):
 
         self.logger.info("Planner Agent initialization complete")
 
+    # ===========================================================
+    # DEBUG: Salva snapshots de cenários em ./llm_interactions
+    # Pode ser removido futuramente apagando este método e suas chamadas.
+    # ===========================================================
+    def _save_scenarios_snapshot(self, stage: str, scenarios: List) -> None:
+        """Save a JSON snapshot of scenarios at a given pipeline stage."""
+        try:
+            os.makedirs("./llm_interactions", exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")[:-3]
+            filename = f"./llm_interactions/{timestamp}_scenarios_{stage}.json"
+            data = {
+                "stage": stage,
+                "count": len(scenarios),
+                "scenarios": [
+                    {
+                        "name": s.name,
+                        "description": s.description,
+                        "endpoint": s.endpoint,
+                        "method": s.method,
+                        "parameters": s.parameters,
+                        "expected_status": s.expected_status,
+                        "is_negative_test": s.is_negative_test,
+                        "test_data": s.test_data,
+                    }
+                    for s in scenarios
+                ],
+            }
+            with open(filename, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            self.logger.info(f"[DEBUG] Saved {len(scenarios)} scenarios snapshot → {filename}")
+        except Exception as e:
+            self.logger.warning(f"[DEBUG] Failed to save scenarios snapshot ({stage}): {e}")
+    # ===========================================================
+
     async def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Process API specification and implementation to generate test scenarios.
@@ -198,6 +234,11 @@ class PlannerAgent(BaseAgent):
                 if enhanced_scenarios:
                     scenarios = enhanced_scenarios
                     self.logger.info("Enhanced scenarios with LLM analysis")
+
+            # ===========================================================
+            # DEBUG: Snapshot 3 – cenários após enriquecimento com LLM
+            self._save_scenarios_snapshot("3_llm_enhanced", scenarios)
+            # ===========================================================
 
             self.logger.info(f"Generated {len(scenarios)} test scenarios")
 
@@ -269,10 +310,21 @@ class PlannerAgent(BaseAgent):
                 f"Generated {len(source_scenarios)} scenarios from source code analysis"
             )
 
+        # ===========================================================
+        # DEBUG: Snapshot 1 – cenários brutos (spec + source code)
+        self._save_scenarios_snapshot("1_raw", scenarios)
+        # ===========================================================
+
         unique_scenarios = self._remove_duplicates(scenarios)
         self.logger.info(
             f"Total scenarios after deduplication: {len(unique_scenarios)}"
         )
+
+        # ===========================================================
+        # DEBUG: Snapshot 2 – cenários após deduplicação
+        self._save_scenarios_snapshot("2_deduplicated", unique_scenarios)
+        # ===========================================================
+
         return unique_scenarios
 
     # ------------------------------------------------------------------
@@ -646,7 +698,7 @@ class PlannerAgent(BaseAgent):
         seen_signatures: set = set()
 
         for scenario in scenarios:
-            signature = (scenario.method, scenario.endpoint, scenario.is_negative_test)
+            signature = (scenario.method,scenario.endpoint,scenario.is_negative_test,scenario.expected_status)
             if signature not in seen_signatures:
                 unique_scenarios.append(scenario)
                 seen_signatures.add(signature)
