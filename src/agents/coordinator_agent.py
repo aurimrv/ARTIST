@@ -227,7 +227,8 @@ class CoordinatorAgent(BaseAgent):
             api_src_path=Path(input_data['api_src_path']) if input_data['api_src_path'] else None,
             output_dir=Path(input_data['output_dir']),
             package_name=input_data['package_name'],
-            main_test_class_name=input_data['main_test_class_name']
+            main_test_class_name=input_data['main_test_class_name'],
+            split_by_endpoint=self.system_config.split_by_endpoint
         )
     
     async def _execute_workflow(self, context: ProjectContext, skip_compilation: bool = False, skip_test_run: bool = False) -> GenerationResult:
@@ -306,6 +307,242 @@ class CoordinatorAgent(BaseAgent):
                 ignored_tests=[]
             )
         
+        if context.split_by_endpoint:
+            return await self._execute_split_by_endpoint(context, scenarios, skip_compilation, skip_test_run)
+        else:
+            return await self._execute_legacy_workflow(context, scenarios, skip_compilation, skip_test_run)
+
+    async def _execute_split_by_endpoint(
+        self,
+        context: ProjectContext,
+        scenarios: List[TestScenario],
+        skip_compilation: bool = False,
+        skip_test_run: bool = False
+    ) -> GenerationResult:
+        """
+        Execute the split-by-endpoint workflow.
+        Each endpoint group is generated, compiled, and tested independently.
+        """
+        generator = self._agents.get('generator')
+        compiler = self._agents.get('compiler_corrector')
+        test_corrector = self._agents.get('test_corrector')
+
+        # Create Maven project structure first
+        if generator:
+            project_dir = await generator._create_maven_project(context)
+            if not project_dir:
+                return GenerationResult(
+                    success=False,
+                    message="Failed to create Maven project structure",
+                    generated_files=[],
+                    compilation_errors=["Maven project creation failed"],
+                    test_failures=[],
+                    ignored_tests=[]
+                )
+        
+        # Group scenarios by endpoint
+        endpoint_groups = generator._group_scenarios_by_endpoint(scenarios, context)
+        group_names = list(endpoint_groups.keys())
+        total_groups = len(group_names)
+
+        self.logger.info(
+            f"split_by_endpoint=True: distributing {len(scenarios)} scenarios "
+            f"across {total_groups} endpoint groups"
+        )
+
+        max_gen_attempts = self.system_config.test_generation.max_generation_attempts
+        max_compile_attempts = self.system_config.test_generation.max_compile_correction_attempts
+        max_test_attempts = self.system_config.test_generation.max_test_correction_attempts
+
+        # Track per-group state
+        compiled_groups: List[str] = []   # class names that compiled successfully
+        failed_groups: List[str] = []     # class names that failed compilation
+        all_generated_files: List[Path] = []
+        all_test_failures: List[str] = []
+        all_ignored_tests: List[str] = []
+
+        test_src_dir = context.maven_project_dir / "src" / "test" / "java"
+        # Derive package subdirectory
+        package_subdir = test_src_dir / context.package_name.replace('.', '/')
+
+        # Clean test directory before starting (preserve BaseApiTest and TestConfig)
+        self._clean_test_directory(package_subdir)
+
+        for group_idx, class_name in enumerate(group_names, 1):
+            group_scenarios = endpoint_groups[class_name]
+            self.logger.info(
+                f"Processing group {group_idx}/{total_groups}: {class_name} ({len(group_scenarios)} scenarios)"
+            )
+
+            # --- Phase 2: Generation (up to max_gen_attempts) ---
+            self.logger.info(f"[Phase 2] Generating test class: {class_name}")
+            generated_file: Optional[Path] = None
+
+            for gen_attempt in range(1, max_gen_attempts + 1):
+                try:
+                    test_content = await generator._generate_single_test_class_with_llm(
+                        context, class_name, group_scenarios, focused=True
+                    )
+                    if test_content:
+                        # Write file
+                        generator.maven_template.add_test_class(
+                            context.maven_project_dir,
+                            context.package_name,
+                            class_name,
+                            test_content
+                        )
+                        generated_file = generator.maven_template.get_test_class_path(
+                            context.maven_project_dir, context.package_name, class_name
+                        )
+                        self.logger.info(f"[Phase 2] {class_name} generated (attempt {gen_attempt}/{max_gen_attempts})")
+                        break
+                    else:
+                        self.logger.warning(
+                            f"[Phase 2] {class_name}: generation attempt {gen_attempt}/{max_gen_attempts} produced no valid code"
+                        )
+                except Exception as e:
+                    self.logger.warning(f"[Phase 2] {class_name}: generation attempt {gen_attempt} error: {e}")
+
+            if not generated_file or not generated_file.exists():
+                self.logger.error(
+                    f"[FATAL] Group {class_name}: generation failed after {max_gen_attempts} attempts — aborting"
+                )
+                failed_groups.append(class_name)
+                return GenerationResult(
+                    success=False,
+                    message=(
+                        f"Generation failure for group '{class_name}' after {max_gen_attempts} attempts. "
+                        f"Generation aborted. The LLM could not produce valid Java code for this class."
+                    ),
+                    generated_files=all_generated_files,
+                    compilation_errors=[f"Group {class_name} failed generation — aborting"],
+                    test_failures=[],
+                    ignored_tests=[]
+                )
+
+            all_generated_files.append(generated_file)
+
+            # --- Phase 3: Compilation (up to max_compile_attempts) ---
+            compiled_ok = False
+            if skip_compilation:
+                compiled_ok = True
+                self.logger.info(f"[Phase 3] {class_name}: compilation skipped")
+            else:
+                for compile_attempt in range(1, max_compile_attempts + 1):
+                    self.logger.info(f"[Phase 3] Compiling: {class_name} (attempt {compile_attempt}/{max_compile_attempts})")
+                    if compiler:
+                        compile_result = await compiler.process({
+                            'project_dir': str(context.maven_project_dir),
+                            'generated_files': [str(generated_file)]
+                        })
+                        # Strip any @Ignore inserted by compiler corrector
+                        self._remove_ignore_from_file(generated_file)
+                        if compile_result.get('success') or compile_result.get('compilation_successful'):
+                            compiled_ok = True
+                            self.logger.info(f"[Phase 3] {class_name} compiled successfully")
+                            break
+                        else:
+                            self.logger.warning(
+                                f"[Phase 3] {class_name}: compile attempt {compile_attempt}/{max_compile_attempts} failed"
+                            )
+                    else:
+                        # No compiler agent — assume success
+                        compiled_ok = True
+                        break
+
+            if not compiled_ok:
+                self.logger.error(
+                    f"[FATAL] Group {class_name}: compilation failed after {max_compile_attempts} attempts — aborting generation"
+                )
+                failed_groups.append(class_name)
+                # Immediately abort: do not continue to next groups
+                return GenerationResult(
+                    success=False,
+                    message=(
+                        f"Compilation failure for group '{class_name}' after {max_compile_attempts} attempts. "
+                        f"Generation aborted. Fix the class '{class_name}' before retrying."
+                    ),
+                    generated_files=all_generated_files,
+                    compilation_errors=[f"Group {class_name} failed compilation — aborting"],
+                    test_failures=[],
+                    ignored_tests=[]
+                )
+
+            compiled_groups.append(class_name)
+
+            # --- Phase 4: Test Execution (up to max_test_attempts) ---
+            if skip_test_run:
+                self.logger.info(f"[Phase 4] {class_name}: test execution skipped")
+            elif test_corrector:
+                for test_attempt in range(1, max_test_attempts + 1):
+                    self.logger.info(f"[Phase 4] Running tests: {class_name} (attempt {test_attempt}/{max_test_attempts})")
+                    test_result = await test_corrector.process({
+                        'project_dir': str(context.maven_project_dir),
+                        'generated_files': [str(generated_file)],
+                        'test_class': class_name  # hint for isolated execution
+                    })
+                    failures = test_result.get('failures', [])
+                    ignored = test_result.get('ignored', [])
+                    if isinstance(failures, list):
+                        failure_count = len(failures)
+                    else:
+                        failure_count = int(failures) if failures else 0
+
+                    all_ignored_tests.extend(ignored if isinstance(ignored, list) else [])
+
+                    if failure_count == 0 or test_result.get('success'):
+                        stats = test_result.get('statistics', {})
+                        passed = stats.get('tests_run', '?')
+                        failed_count_stat = stats.get('failures', 0) + stats.get('errors', 0)
+                        self.logger.info(f"[Phase 4] {class_name}: {passed} passed, {failed_count_stat} failed")
+                        break
+                    else:
+                        if isinstance(failures, list):
+                            all_test_failures.extend([str(f) for f in failures])
+                        self.logger.warning(
+                            f"[Phase 4] {class_name}: {failure_count} failures on attempt {test_attempt}/{max_test_attempts}"
+                        )
+
+            self.logger.info(f"Group {class_name}: DONE")
+
+        # --- Phase 5: Generate Suite Runner ---
+        self.logger.info(f"[Phase 5] Creating Suite runner ApiIntegrationTest with {len(compiled_groups)} compiled groups")
+        suite_file = self._generate_suite_runner(context, compiled_groups)
+        if suite_file:
+            all_generated_files.append(suite_file)
+
+        if failed_groups:
+            self.logger.warning(
+                f"Groups excluded from Suite runner (compilation failed): {', '.join(failed_groups)}"
+            )
+
+        success = len(compiled_groups) > 0
+        message = (
+            f"split_by_endpoint: {len(compiled_groups)}/{total_groups} groups compiled successfully. "
+            f"Suite runner includes: {compiled_groups}."
+        )
+        if failed_groups:
+            message += f" Failed groups (excluded): {failed_groups}."
+
+        return GenerationResult(
+            success=success,
+            message=message,
+            generated_files=all_generated_files,
+            compilation_errors=[f"Group {g} failed compilation" for g in failed_groups],
+            test_failures=all_test_failures,
+            ignored_tests=all_ignored_tests
+        )
+
+    async def _execute_legacy_workflow(
+        self,
+        context: ProjectContext,
+        scenarios: List[TestScenario],
+        skip_compilation: bool = False,
+        skip_test_run: bool = False
+    ) -> GenerationResult:
+        """
+        Execute the legacy (non-split) workflow: generate all → compile all → run all.
+        """
         # Step 2: Generation phase
         self.log_progress("Phase 2: Generating test code", 2, 5)
         generated_files = await self._run_generation_phase(context, scenarios)
@@ -358,6 +595,93 @@ class CoordinatorAgent(BaseAgent):
             test_failures=test_result.get('failures', []),
             ignored_tests=test_result.get('ignored', [])
         )
+
+    def _clean_test_directory(self, package_dir: Path):
+        """
+        Remove all .java test files from the package directory,
+        preserving BaseApiTest.java and TestConfig.java.
+        """
+        PRESERVED_FILES = {'BaseApiTest.java', 'TestConfig.java'}
+        if not package_dir.exists():
+            return
+        for java_file in package_dir.glob('*.java'):
+            if java_file.name not in PRESERVED_FILES:
+                try:
+                    java_file.unlink()
+                    self.logger.debug(f"Cleaned test file: {java_file.name}")
+                except Exception as e:
+                    self.logger.warning(f"Could not remove {java_file}: {e}")
+
+    def _remove_ignore_from_file(self, file_path: Path):
+        """
+        Remove any @Ignore annotations (and unused import) inserted by compiler corrector.
+        """
+        if not file_path or not file_path.exists():
+            return
+        try:
+            content = file_path.read_text(encoding='utf-8')
+            if '@Ignore' not in content:
+                return
+            import re
+            cleaned = re.sub(r'\s*@Ignore(?:\([^)]*\))?\s*\n', '\n', content)
+            # Remove import if no @Ignore remains
+            if '@Ignore' not in cleaned:
+                cleaned = re.sub(r'\s*import\s+org\.junit\.Ignore\s*;\s*\n', '\n', cleaned)
+            if cleaned != content:
+                file_path.write_text(cleaned, encoding='utf-8')
+                self.logger.warning(f"@Ignore removed from {file_path.name} (compiler corrector inserted it illegally)")
+        except Exception as e:
+            self.logger.warning(f"Failed to remove @Ignore from {file_path}: {e}")
+
+    def _generate_suite_runner(self, context: ProjectContext, compiled_groups: List[str]) -> Optional[Path]:
+        """
+        Deterministically generate ApiIntegrationTest.java as a JUnit 4 Suite runner.
+        Only includes groups that passed Phase 3 (compilation).
+        """
+        try:
+            if not compiled_groups:
+                self.logger.warning("[Phase 5] No compiled groups — Suite runner not generated")
+                return None
+
+            suite_classes = "\n".join(
+                f"    {cls}.class," for cls in compiled_groups
+            )
+            # Remove trailing comma from last line
+            lines = suite_classes.rstrip(',\n').rsplit(',', 1)
+            suite_classes_clean = lines[0] if len(lines) == 1 else lines[0]
+            # Rebuild properly
+            class_lines = [f"    {cls}.class," for cls in compiled_groups]
+            class_lines[-1] = class_lines[-1].rstrip(',')  # remove trailing comma on last
+            suite_classes_str = "\n".join(class_lines)
+
+            suite_content = (
+                f"package {context.package_name};\n\n"
+                f"import org.junit.runner.RunWith;\n"
+                f"import org.junit.runners.Suite;\n\n"
+                f"@RunWith(Suite.class)\n"
+                f"@Suite.SuiteClasses({{\n"
+                f"{suite_classes_str}\n"
+                f"}})\n"
+                f"public class ApiIntegrationTest {{}}\n"
+            )
+
+            from ..templates import MavenProjectTemplate
+            maven_template = MavenProjectTemplate()
+            maven_template.add_test_class(
+                context.maven_project_dir,
+                context.package_name,
+                'ApiIntegrationTest',
+                suite_content
+            )
+            suite_file = maven_template.get_test_class_path(
+                context.maven_project_dir, context.package_name, 'ApiIntegrationTest'
+            )
+            self.logger.info(f"[Phase 5] Created Suite runner ApiIntegrationTest with {len(compiled_groups)} compiled groups")
+            return suite_file
+        except Exception as e:
+            self.log_error("Failed to generate Suite runner", e)
+            return None
+
     
     async def _run_planning_phase(self, context: ProjectContext) -> List[TestScenario]:
         """

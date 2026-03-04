@@ -632,6 +632,76 @@ CRITICAL: Return ONLY the complete Java class code. Do NOT include any explanati
             **kwargs
         )
 
+    async def generate_test_code_focused(
+        self,
+        scenarios_context: str,
+        project_context: dict,
+        openapi_context: str,
+        model: str,
+        **kwargs
+    ) -> str:
+        """
+        Generate JUnit test code for a FOCUSED (split_by_endpoint) group.
+
+        This variant uses a stricter prompt that instructs the LLM to generate
+        EXACTLY the listed scenarios without expanding to extra boundary/edge cases.
+        This prevents token-limit truncation when groups have many scenarios.
+        """
+        system_message = """You are an expert Java developer specializing in test automation.
+Your task is to generate a JUnit 4 test class using Rest Assured for API integration testing.
+
+STRICT SCOPE RULE: Generate ONLY the @Test methods listed in the scenarios below.
+Do NOT add extra boundary-value tests or edge-case tests beyond what is specified.
+Keep the class small and complete — truncated output is invalid.
+
+CRITICAL: Return ONLY the Java code. No explanations. No markdown. No code fences.
+Start directly with the package declaration."""
+
+        project_context_str = f"""Project Context:
+- Package: {project_context.get('package_name', 'com.example.tests')}
+- Test Class Name: {project_context.get('class_name', 'ApiIntegrationTest')}
+- Base URL: {project_context.get('base_url', 'http://localhost:8080')}
+
+REQUIREMENTS:
+1. JUnit 4 annotations (@Test, @Before, @After, @BeforeClass)
+2. Rest Assured (import static io.restassured.RestAssured.*)
+3. Java 8 compatibility
+4. @Before setupTestData() — create all necessary fixture data using POST
+5. @After cleanupTestData() — delete all created data in reverse dependency order
+6. setupTestData() and cleanupTestData() MUST be symmetric: every entity created must be deleted
+7. Each @Test method is independent and uses the pre-created fixture data
+8. Each @Test must use @Test(timeout = 60000)
+9. Validate response body is not null before JsonPath usage (try-catch around JSON parsing)
+10. Generate EXACTLY the scenarios listed — one @Test per scenario, no more
+
+IMPORTS REQUIRED:
+- import static io.restassured.RestAssured.*;
+- import static org.hamcrest.Matchers.*;
+- import static org.junit.Assert.*;
+- import org.junit.*;
+- import io.restassured.response.Response;
+- import io.restassured.path.json.JsonPath;
+"""
+
+        prompt = f"""{project_context_str}
+
+{openapi_context}
+
+{scenarios_context}
+
+CRITICAL: Return the COMPLETE Java class. If the class cannot fit in one response, reduce
+the number of assertions per test method. Never truncate the class — it must end with the
+closing brace `}}` of the public class declaration.
+Return ONLY the Java class code starting with the package declaration."""
+
+        kwargs.setdefault("_operation_label", "generate_tests_focused")
+        return await self.generate_text(
+            prompt=prompt,
+            model=model,
+            system_message=system_message,
+            **kwargs
+        )
+
     async def generate_enhanced_test_scenarios(
         self,
         prompt: str,

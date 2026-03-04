@@ -82,6 +82,8 @@ class TestCorrectorAgent(BaseAgent):
             
             project_dir = Path(input_data['project_dir'])
             generated_files = [Path(f) for f in input_data['generated_files']]
+            # Optional: run only a specific test class (for split-by-endpoint isolation)
+            test_class_hint: Optional[str] = input_data.get('test_class')
             
             # Initialize version manager for this project
             if not self.version_manager:
@@ -92,7 +94,7 @@ class TestCorrectorAgent(BaseAgent):
             
             # Step 1: Initial test run
             self.log_progress("Running initial tests", 1, 4)
-            test_result = await self._run_tests(project_dir)
+            test_result = await self._run_tests(project_dir, test_class=test_class_hint)
 
             if test_result['success'] and test_result['failures'] == 0:
                 self.logger.info("All tests passed - no corrections needed")
@@ -113,12 +115,12 @@ class TestCorrectorAgent(BaseAgent):
             # Step 3: Fix test failures iteratively
             self.log_progress("Fixing test failures", 3, 4)
             correction_result = await self._fix_test_failures(
-                project_dir, generated_files, failures
+                project_dir, generated_files, failures, test_class=test_class_hint
             )
             
             # Step 4: Final test run verification
             self.log_progress("Verifying final test results", 4, 4)
-            final_result = await self._run_tests(project_dir)
+            final_result = await self._run_tests(project_dir, test_class=test_class_hint)
             
             return {
                 'success': final_result['success'],
@@ -170,12 +172,13 @@ class TestCorrectorAgent(BaseAgent):
         
         return errors
     
-    async def _run_tests(self, project_dir: Path) -> Dict[str, Any]:
+    async def _run_tests(self, project_dir: Path, test_class: Optional[str] = None) -> Dict[str, Any]:
         """
         Run tests in the Maven project and analyze results.
         
         Args:
             project_dir: Path to the Maven project
+            test_class: Optional specific test class to run (for isolated execution)
         
         Returns:
             Test execution result dictionary
@@ -183,9 +186,9 @@ class TestCorrectorAgent(BaseAgent):
         try:
             self.logger.info(f"Running tests in Maven project: {project_dir}")
             
-            # Run Maven tests
+            # Run Maven tests — optionally isolated to a single class
             maven_result = await self.maven_runner.run_tests(
-                project_dir, timeout=self.test_timeout
+                project_dir, timeout=self.test_timeout, test_class=test_class
             )
             
             result = {
@@ -269,43 +272,50 @@ class TestCorrectorAgent(BaseAgent):
         return statistics
     
     def _parse_test_statistics_from_xml(self, project_dir: Path) -> Dict[str, Any]:
-        """Parse test statistics from Surefire XML reports (more reliable)."""
+        """Parse test statistics from Surefire XML reports (more reliable).
+
+        When Surefire uses rerunFailingTestsCount the testsuite-level
+        'failures' attribute does NOT include <flakyFailure> entries (tests
+        that failed on the first run but passed on the rerun).  We count those
+        explicitly from the individual testcase elements so the corrector loop
+        can see the real number of problematic tests.
+        """
         import xml.etree.ElementTree as ET
-        
+
         statistics = {
             'tests_run': 0,
             'failures': 0,
             'errors': 0,
             'skipped': 0
         }
-        
+
         surefire_dir = project_dir / "target" / "surefire-reports"
         if not surefire_dir.exists():
             self.logger.warning(f"Surefire reports directory not found: {surefire_dir}")
             return statistics
-        
-        # Parse all XML report files
+
         for xml_file in surefire_dir.glob("TEST-*.xml"):
             try:
                 tree = ET.parse(xml_file)
                 root = tree.getroot()
-                
-                # Extract statistics from testsuite element
-                if root.tag == 'testsuite':
-                    statistics['tests_run'] += int(root.get('tests', 0))
-                    statistics['failures'] += int(root.get('failures', 0))
-                    statistics['errors'] += int(root.get('errors', 0))
-                    statistics['skipped'] += int(root.get('skipped', 0))
-                elif root.tag == 'testsuites':
-                    for testsuite in root.findall('testsuite'):
-                        statistics['tests_run'] += int(testsuite.get('tests', 0))
-                        statistics['failures'] += int(testsuite.get('failures', 0))
-                        statistics['errors'] += int(testsuite.get('errors', 0))
-                        statistics['skipped'] += int(testsuite.get('skipped', 0))
-                    
+
+                testsuites = [root] if root.tag == 'testsuite' else root.findall('testsuite')
+
+                for testsuite in testsuites:
+                    statistics['tests_run'] += int(testsuite.get('tests', 0))
+                    statistics['failures']  += int(testsuite.get('failures', 0))
+                    statistics['errors']    += int(testsuite.get('errors', 0))
+                    statistics['skipped']   += int(testsuite.get('skipped', 0))
+
+                    # Count flakyFailure / rerunFailure elements that the
+                    # testsuite attributes leave out.
+                    for testcase in testsuite.findall('testcase'):
+                        for tag in ('flakyFailure', 'rerunFailure'):
+                            statistics['failures'] += len(testcase.findall(tag))
+
             except Exception as e:
                 self.logger.warning(f"Failed to parse XML statistics from {xml_file}: {e}")
-        
+
         self.logger.info(f"Parsed test statistics from XML: {statistics}")
         return statistics
     
@@ -463,40 +473,45 @@ class TestCorrectorAgent(BaseAgent):
                     test_name = testcase.get('name', '')
                     test_class = testcase.get('classname', '')
                     test_time = float(testcase.get('time', 0))
-                    
-                    # Check for failure
-                    failure_elem = testcase.find('failure')
-                    if failure_elem is not None:
-                        failure_message = failure_elem.get('message', '')
-                        failure_type = failure_elem.get('type', 'FAILURE')
-                        failure_content = failure_elem.text or ''
-                        
-                        # Get system output if available
-                        system_out_elem = testcase.find('system-out')
-                        system_out = system_out_elem.text if system_out_elem is not None else ''
-                        
-                        system_err_elem = testcase.find('system-err')
-                        system_err = system_err_elem.text if system_err_elem is not None else ''
-                        
-                        # Clean up message if it contains newlines
-                        message = failure_message
-                        stack_trace = failure_content
-                        if '\n' in failure_message:
-                            lines = failure_message.split('\n')
-                            message = lines[0]
-                            if not stack_trace:
-                                stack_trace = '\n'.join(lines[1:])
-                        
-                        failures.append(TestFailure(
-                            test_class=test_class,
-                            test_method=test_name,
-                            failure_type=failure_type,
-                            message=message,
-                            stack_trace=stack_trace,
-                            full_output=f"{failure_message}\n{failure_content}\nSystem Out: {system_out}\nSystem Err: {system_err}"
-                        ))
-                    
-                    # Check for error
+
+                    # When Surefire uses rerunFailingTestsCount, tests that fail
+                    # on Run 1 but pass on Run 2 are recorded as <flakyFailure>
+                    # instead of <failure>. Tests that fail on ALL runs are
+                    # recorded as <failure> (or sometimes <rerunFailure>).
+                    # We must capture both so that the correction loop sees
+                    # them and eventually @Ignores the ones it cannot fix.
+                    for elem_tag in ('failure', 'flakyFailure', 'rerunFailure'):
+                        for fail_elem in testcase.findall(elem_tag):
+                            failure_message = fail_elem.get('message', '')
+                            failure_type = fail_elem.get('type', 'FAILURE')
+                            failure_content = fail_elem.text or ''
+
+                            system_out_elem = testcase.find('system-out')
+                            system_out = system_out_elem.text if system_out_elem is not None else ''
+                            system_err_elem = testcase.find('system-err')
+                            system_err = system_err_elem.text if system_err_elem is not None else ''
+
+                            message = failure_message
+                            stack_trace = failure_content
+                            if '\n' in failure_message:
+                                lines = failure_message.split('\n')
+                                message = lines[0]
+                                if not stack_trace:
+                                    stack_trace = '\n'.join(lines[1:])
+
+                            failures.append(TestFailure(
+                                test_class=test_class,
+                                test_method=test_name,
+                                failure_type=f"{elem_tag.upper()}:{failure_type}",
+                                message=message,
+                                stack_trace=stack_trace,
+                                full_output=(
+                                    f"{failure_message}\n{failure_content}\n"
+                                    f"System Out: {system_out}\nSystem Err: {system_err}"
+                                )
+                            ))
+
+                    # Check for error (separate from failure elements)
                     error_elem = testcase.find('error')
                     if error_elem is not None:
                         error_message = error_elem.get('message', '')
@@ -539,7 +554,8 @@ class TestCorrectorAgent(BaseAgent):
         self,
         project_dir: Path,
         generated_files: List[Path],
-        failures: List[TestFailure]
+        failures: List[TestFailure],
+        test_class: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Fix test failures iteratively.
@@ -548,6 +564,7 @@ class TestCorrectorAgent(BaseAgent):
             project_dir: Project directory
             generated_files: List of generated files
             failures: List of test failures
+            test_class: Optional specific test class for isolated re-runs
         
         Returns:
             Correction result dictionary
@@ -584,8 +601,8 @@ class TestCorrectorAgent(BaseAgent):
                     tests_ignored_this_round.extend(correction_result['ignored'])
                     ignored_tests.extend(correction_result['ignored'])
             
-            # Re-run tests to check if failures are fixed
-            test_result = await self._run_tests(project_dir)
+            # Re-run tests to check if failures are fixed (isolated if test_class given)
+            test_result = await self._run_tests(project_dir, test_class=test_class)
             current_failures = test_result.get('test_failures', [])
             
             if test_result['failures'] == 0 and test_result['errors'] == 0:

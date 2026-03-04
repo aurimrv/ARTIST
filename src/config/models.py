@@ -69,6 +69,7 @@ class SystemConfig:
     agents: Dict[str, AgentConfig]
     java_validation_enabled: bool
     log_level: str
+    split_by_endpoint: bool = True
     
     
 @dataclass
@@ -80,6 +81,7 @@ class ProjectContext:
     output_dir: Path
     package_name: str
     main_test_class_name: str
+    split_by_endpoint: bool = True
     
     # Derived paths
     generated_test_dir: Optional[Path] = None

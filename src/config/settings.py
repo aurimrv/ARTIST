@@ -99,7 +99,8 @@ class Settings:
             test_generation=test_generation,
             agents=agents,
             java_validation_enabled=self._get_env_bool('JAVA_VALIDATION_ENABLED', True),
-            log_level=self._get_env('LOG_LEVEL', 'INFO')
+            log_level=self._get_env('LOG_LEVEL', 'INFO'),
+            split_by_endpoint=self._get_env_bool('SPLIT_BY_ENDPOINT', True)
         )
     
     def _load_agent_configs(self, default_model: str) -> Dict[str, AgentConfig]:

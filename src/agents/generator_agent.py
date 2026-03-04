@@ -81,7 +81,12 @@ class GeneratorAgent(BaseAgent):
             
             # Step 2: Generate test classes directly with LLM
             self.log_progress("Generating test classes with LLM", 2, 3)
-            generated_files = await self._generate_test_classes_with_llm(context, scenarios)
+            if context.split_by_endpoint:
+                # In split mode, coordinator handles per-group generation;
+                # here we just call the normal path which now groups by endpoint.
+                generated_files = await self._generate_test_classes_with_llm(context, scenarios)
+            else:
+                generated_files = await self._generate_test_classes_with_llm(context, scenarios)
 
             if not generated_files:
                 return {
@@ -245,25 +250,135 @@ class GeneratorAgent(BaseAgent):
     ) -> Dict[str, List[TestScenario]]:
         """
         Group scenarios by test class.
-        
-        Args:
-            scenarios: List of test scenarios
-            context: Project context
-        
-        Returns:
-            Dictionary mapping class names to scenarios
+        When split_by_endpoint is True, groups by endpoint.
+        Otherwise, puts all in the main test class.
         """
-        # For now, put all scenarios in the main test class
-        # In the future, could group by endpoint or functionality
-        return {
-            context.main_test_class_name: scenarios
-        }
+        if context.split_by_endpoint:
+            return self._group_scenarios_by_endpoint(scenarios, context)
+        return {context.main_test_class_name: scenarios}
+
+    def _group_scenarios_by_endpoint(
+        self,
+        scenarios: List[TestScenario],
+        context: ProjectContext
+    ) -> Dict[str, List[TestScenario]]:
+        """
+        Group scenarios by endpoint, normalizing endpoints against the OpenAPI spec.
+
+        Returns:
+            OrderedDict mapping class names to lists of scenarios, preserving insertion order.
+        """
+        from collections import OrderedDict
+        import re
+
+        # Load spec endpoints for normalization
+        spec_endpoints: List[str] = self._load_spec_endpoints(context)
+
+        groups: Dict[str, List[TestScenario]] = OrderedDict()
+        for scenario in scenarios:
+            normalized = self._normalize_endpoint(scenario.endpoint, spec_endpoints)
+            class_name = self._endpoint_to_class_name(normalized)
+            groups.setdefault(class_name, []).append(scenario)
+
+        return groups
+
+    def _load_spec_endpoints(self, context: ProjectContext) -> List[str]:
+        """Load path keys from the OpenAPI spec."""
+        try:
+            import json
+            spec_path = context.api_spec_path
+            if spec_path and spec_path.exists():
+                with open(spec_path, 'r', encoding='utf-8') as f:
+                    spec = json.load(f)
+                return list(spec.get('paths', {}).keys())
+        except Exception as e:
+            self.logger.warning(f"Could not load spec endpoints for normalization: {e}")
+        return []
+
+    def _normalize_endpoint(self, endpoint: str, spec_endpoints: List[str]) -> str:
+        """
+        Normalize an endpoint against the OpenAPI spec.
+
+        Step 1: Try structural match against spec endpoints (same number of fixed
+                segments in same positions). Use the spec version if found.
+        Step 2: Otherwise, replace concrete-looking segments with {param}.
+        """
+        import re
+
+        def segments(path: str) -> List[str]:
+            return [s for s in path.split('/') if s]
+
+        endpoint_segs = segments(endpoint)
+        n = len(endpoint_segs)
+
+        # Build set of all fixed segment values used anywhere in spec
+        all_fixed_spec_segs: set = set()
+        for sp in spec_endpoints:
+            for seg in segments(sp):
+                if not (seg.startswith('{') and seg.endswith('}')):
+                    all_fixed_spec_segs.add(seg)
+
+        # Step 1: structural match
+        for spec_ep in spec_endpoints:
+            spec_segs = segments(spec_ep)
+            if len(spec_segs) != n:
+                continue
+            match = True
+            for s_seg, e_seg in zip(spec_segs, endpoint_segs):
+                is_spec_param = s_seg.startswith('{') and s_seg.endswith('}')
+                if not is_spec_param:
+                    # Fixed spec segment must match concrete endpoint segment
+                    if s_seg != e_seg:
+                        match = False
+                        break
+                # param segments can match anything
+            if match:
+                return spec_ep
+
+        # Step 2: substitute concrete segments that don't appear as fixed spec segments
+        normalized_segs = []
+        for seg in endpoint_segs:
+            if seg.startswith('{') and seg.endswith('}'):
+                normalized_segs.append(seg)
+            elif seg in all_fixed_spec_segs:
+                normalized_segs.append(seg)
+            else:
+                # Looks like a concrete value — replace with {param}
+                normalized_segs.append('{param}')
+        return '/' + '/'.join(normalized_segs)
+
+    @staticmethod
+    def _endpoint_to_class_name(endpoint: str) -> str:
+        """
+        Convert a normalized endpoint path to a Java test class name.
+
+        Rules:
+          - Remove all {param} segments
+          - Split by '/', discard empty segments
+          - CamelCase each remaining segment
+          - Concatenate + 'Test' suffix
+          - Special case: '/' or empty → 'RootTest'
+        """
+        import re
+
+        segs = [s for s in endpoint.split('/') if s and not (s.startswith('{') and s.endswith('}'))]
+        if not segs:
+            return 'RootTest'
+
+        def to_camel(seg: str) -> str:
+            # Split on non-alphanumeric and capitalize each part
+            parts = re.split(r'[^a-zA-Z0-9]+', seg)
+            return ''.join(p.capitalize() for p in parts if p)
+
+        return ''.join(to_camel(s) for s in segs) + 'Test'
+
     
     async def _generate_single_test_class_with_llm(
         self,
         context: ProjectContext,
         class_name: str,
-        scenarios: List[TestScenario]
+        scenarios: List[TestScenario],
+        focused: bool = False
     ) -> Optional[str]:
         """
         Generate a single test class directly using LLM.
@@ -272,13 +387,19 @@ class GeneratorAgent(BaseAgent):
             context: Project context
             class_name: Name of the test class
             scenarios: Scenarios for this class
+            focused: If True, generate ONLY the listed scenarios without extra expansion
+                     (used in split_by_endpoint mode to avoid truncation)
         
         Returns:
             Generated test class content or None if generation fails
         """
         try:
             # Prepare contexts for LLM using centralized formatting
-            scenarios_context = self._format_scenarios_for_llm(scenarios)
+            # In focused/split mode, use a compact format that does NOT encourage expansion
+            if focused:
+                scenarios_context = self._format_scenarios_for_llm_focused(scenarios)
+            else:
+                scenarios_context = self._format_scenarios_for_llm(scenarios)
             openapi_context = self._format_openapi_context_for_llm(context)
             
             # Prepare project context as dictionary
@@ -289,18 +410,29 @@ class GeneratorAgent(BaseAgent):
                 'output_dir': str(context.output_dir)
             }
 
-            self.logger.info(f"Generator MAX_TOKENS: {self.get_max_tokens()}")
+            self.logger.info(f"Generator MAX_TOKENS: {self.get_max_tokens()} focused={focused}")
 
             # Use centralized method from openrouter_client with full context
-            test_content = await self.openrouter_client.generate_test_code_with_full_context(
-                scenarios_context=scenarios_context,
-                project_context=project_context_dict,
-                openapi_context=openapi_context,
-                model=self.get_model_name(),
-                max_tokens=self.get_max_tokens(),
-                temperature=self.get_temperature(),
-                seed=self.get_seed()
-            )
+            if focused:
+                test_content = await self.openrouter_client.generate_test_code_focused(
+                    scenarios_context=scenarios_context,
+                    project_context=project_context_dict,
+                    openapi_context=openapi_context,
+                    model=self.get_model_name(),
+                    max_tokens=self.get_max_tokens(),
+                    temperature=self.get_temperature(),
+                    seed=self.get_seed()
+                )
+            else:
+                test_content = await self.openrouter_client.generate_test_code_with_full_context(
+                    scenarios_context=scenarios_context,
+                    project_context=project_context_dict,
+                    openapi_context=openapi_context,
+                    model=self.get_model_name(),
+                    max_tokens=self.get_max_tokens(),
+                    temperature=self.get_temperature(),
+                    seed=self.get_seed()
+                )
 
             print(f"#### generator simple_test_class test_content:{test_content}")
 
@@ -365,6 +497,54 @@ class GeneratorAgent(BaseAgent):
         )
 
         return scenarios_text
+
+    def _format_scenarios_for_llm_focused(self, scenarios: List[TestScenario]) -> str:
+        """
+        Format test scenarios for focused (split_by_endpoint) generation.
+        In this mode we do NOT encourage the LLM to expand beyond the listed scenarios,
+        because each group is small and expansion causes token-limit truncation.
+        Generate EXACTLY the listed scenarios — one @Test method per scenario.
+        Extra tests are allowed only if they are minimal and do not risk truncation.
+        """
+        total = len(scenarios)
+        positive = sum(1 for s in scenarios if not s.is_negative_test)
+        negative = sum(1 for s in scenarios if s.is_negative_test)
+
+        scenarios_text = (
+            f"TEST COVERAGE REQUIREMENT:\n"
+            f"Generate exactly {total} @Test methods — one per scenario listed below.\n"
+            f"There are {total} scenarios ({positive} positive, {negative} negative).\n"
+            f"Each scenario MUST have its own dedicated @Test method.\n"
+            f"Do NOT add extra boundary/edge-case tests beyond what is listed — "
+            f"keep the class small to avoid output truncation.\n"
+            f"NEVER merge, skip, or omit any of the {total} scenarios listed below.\n\n"
+            f"Test Scenarios ({total} total):\n\n"
+        )
+
+        for i, scenario in enumerate(scenarios, 1):
+            scenarios_text += f"Scenario {i}/{total}:\n"
+            scenarios_text += f"- Name: {scenario.name}\n"
+            scenarios_text += f"- Description: {scenario.description}\n"
+            scenarios_text += f"- Method: {scenario.method}\n"
+            scenarios_text += f"- Endpoint: {scenario.endpoint}\n"
+            scenarios_text += f"- Expected Status: {scenario.expected_status}\n"
+            scenarios_text += f"- Is Negative Test: {scenario.is_negative_test}\n"
+
+            if scenario.parameters:
+                scenarios_text += f"- Parameters: {scenario.parameters}\n"
+
+            if scenario.test_data:
+                scenarios_text += f"- Test Data: {scenario.test_data}\n"
+
+            scenarios_text += "\n"
+
+        scenarios_text += (
+            f"FINAL REMINDER: Generate exactly {total} @Test methods — one per scenario. "
+            f"Do NOT add more. Keep the class concise and complete.\n"
+        )
+
+        return scenarios_text
+
 
     def _format_openapi_context_for_llm(self, context: ProjectContext) -> str:
         """Format OpenAPI specification context for LLM consumption."""
