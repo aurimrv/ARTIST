@@ -547,7 +547,21 @@ class GeneratorAgent(BaseAgent):
 
 
     def _format_openapi_context_for_llm(self, context: ProjectContext) -> str:
-        """Format OpenAPI specification context for LLM consumption."""
+        """
+        Format OpenAPI specification context for LLM consumption.
+
+        In addition to content-type and schema information, this method now
+        extracts all example values declared in the specification:
+
+        * ``param.example`` / ``param.examples[*].value``
+        * ``param.x-parameter-examples``
+        * ``requestBody.content[*].examples[*].value``
+        * ``responses[status].content[*].examples[*].value``
+
+        These examples are injected into the prompt so the LLM can use
+        real, spec-provided values when generating test assertions and
+        request payloads.
+        """
         try:
             # Try to access OpenAPI specification from context
             if hasattr(context, 'api_spec_path') and context.api_spec_path:
@@ -610,7 +624,7 @@ class GeneratorAgent(BaseAgent):
                                         required = request_body.get('required', False)
                                         openapi_context += f"      Required: {required}\n"
                                     
-                                    # Parameters
+                                    # Parameters (with examples)
                                     if 'parameters' in operation:
                                         openapi_context += "    Parameters:\n"
                                         for param in operation['parameters']:
@@ -618,14 +632,31 @@ class GeneratorAgent(BaseAgent):
                                             param_type = param.get('type', param.get('schema', {}).get('type', 'unknown'))
                                             param_required = param.get('required', False)
                                             param_in = param.get('in', 'unknown')
-                                            openapi_context += f"      - {param_name} ({param_type}) in {param_in} {'[required]' if param_required else '[optional]'}\n"
+                                            openapi_context += f"      - {param_name} ({param_type}) in {param_in} {'[required]' if param_required else '[optional]'}"
+                                            # Collect all available examples for this parameter
+                                            param_examples = self._collect_param_examples(param)
+                                            if param_examples:
+                                                openapi_context += f" [examples: {param_examples}]"
+                                            openapi_context += "\n"
+
+                                    # Request body examples
+                                    if 'requestBody' in operation:
+                                        rb_examples = self._collect_request_body_examples(operation['requestBody'])
+                                        if rb_examples:
+                                            import json as _json
+                                            openapi_context += "    Request Body Examples:\n"
+                                            for ex in rb_examples[:2]:
+                                                ex_str = _json.dumps(ex, ensure_ascii=False)
+                                                if len(ex_str) > 400:
+                                                    ex_str = ex_str[:400] + '...'
+                                                openapi_context += f"      {ex_str}\n"
                                     
                                     # Responses
                                     if 'responses' in operation:
                                         openapi_context += "    Responses:\n"
                                         for status_code, response in operation['responses'].items():
                                             openapi_context += f"      {status_code}: {response.get('description', 'No description')}\n"
-                                            
+
                                             # Response content (OpenAPI 3.0)
                                             if 'content' in response:
                                                 for content_type, content in response['content'].items():
@@ -633,7 +664,17 @@ class GeneratorAgent(BaseAgent):
                                                     if 'schema' in content:
                                                         schema = content['schema']
                                                         openapi_context += f"        Schema: {self._format_schema_info(schema)}\n"
-                                            
+                                                    # Response body examples
+                                                    resp_examples = self._collect_media_examples(content)
+                                                    if resp_examples:
+                                                        import json as _json
+                                                        openapi_context += f"        Response Examples ({status_code}):\n"
+                                                        for ex in resp_examples[:1]:
+                                                            ex_str = _json.dumps(ex, ensure_ascii=False)
+                                                            if len(ex_str) > 400:
+                                                                ex_str = ex_str[:400] + '...'
+                                                            openapi_context += f"          {ex_str}\n"
+
                                             # Response headers
                                             if 'headers' in response:
                                                 openapi_context += "        Headers:\n"
@@ -660,6 +701,13 @@ class GeneratorAgent(BaseAgent):
                     openapi_context += "- For form data, use 'application/x-www-form-urlencoded' or 'multipart/form-data'\n"
                     openapi_context += "- Always validate response Content-Type matches expected values\n"
                     openapi_context += "- Do NOT assume fields like 'id' exist unless specified in the response schema\n"
+                    openapi_context += "\nIMPORTANT EXAMPLES USAGE GUIDELINES:\n"
+                    openapi_context += "- When a parameter has [examples: ...] listed above, USE those exact values in your test methods.\n"
+                    openapi_context += "- When multiple example values are listed for a parameter, create separate @Test methods\n"
+                    openapi_context += "  for each distinct value to maximise input coverage.\n"
+                    openapi_context += "- When 'Request Body Examples' are provided, use them as the request payload in your tests.\n"
+                    openapi_context += "- When 'Response Examples' are provided, use them to build body assertions (e.g. body(\"field\", equalTo(\"value\"))).\n"
+                    openapi_context += "- Prefer spec-provided examples over invented test data at all times.\n"
                     
                     return openapi_context
                 else:
@@ -670,6 +718,103 @@ class GeneratorAgent(BaseAgent):
         except Exception as e:
             self.logger.warning(f"Failed to load OpenAPI specification: {e}")
             return "OpenAPI Specification: Failed to load - use careful response validation and standard Content-Types in tests.\n"
+
+    # ------------------------------------------------------------------
+    # Example collection helpers (used by _format_openapi_context_for_llm)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _collect_param_examples(param: dict) -> list:
+        """
+        Collect all example values for a single parameter object.
+
+        Sources (in order):
+        1. ``param.example``
+        2. ``param.examples[*].value``  (OpenAPI 3.x Example Objects)
+        3. ``param.x-parameter-examples``  (custom extension)
+        4. ``param.schema.example``
+        5. ``param.schema.examples``  (JSON Schema array)
+        """
+        examples: list = []
+        seen: set = set()
+
+        def _add(val):
+            if val is None:
+                return
+            key = repr(val)
+            if key not in seen:
+                seen.add(key)
+                examples.append(val)
+
+        if 'example' in param:
+            _add(param['example'])
+
+        for ex_obj in param.get('examples', {}).values():
+            if isinstance(ex_obj, dict) and 'value' in ex_obj:
+                _add(ex_obj['value'])
+            elif not isinstance(ex_obj, dict):
+                _add(ex_obj)
+
+        x_examples = param.get('x-parameter-examples')
+        if x_examples is not None:
+            if isinstance(x_examples, list):
+                for v in x_examples:
+                    _add(v)
+            elif isinstance(x_examples, dict):
+                for ex_obj in x_examples.values():
+                    if isinstance(ex_obj, dict) and 'value' in ex_obj:
+                        _add(ex_obj['value'])
+                    else:
+                        _add(ex_obj)
+            else:
+                _add(x_examples)
+
+        schema = param.get('schema', {})
+        if isinstance(schema, dict):
+            if 'example' in schema:
+                _add(schema['example'])
+            for v in schema.get('examples', []):
+                _add(v)
+
+        return examples
+
+    @staticmethod
+    def _collect_media_examples(media_obj: dict) -> list:
+        """
+        Collect example values from a media-type object
+        (``requestBody.content[mediaType]`` or ``responses[status].content[mediaType]``).
+        """
+        examples: list = []
+        seen: set = set()
+
+        def _add(val):
+            if val is None:
+                return
+            key = repr(val)[:200]
+            if key not in seen:
+                seen.add(key)
+                examples.append(val)
+
+        for ex_obj in media_obj.get('examples', {}).values():
+            if isinstance(ex_obj, dict) and 'value' in ex_obj:
+                _add(ex_obj['value'])
+            elif not isinstance(ex_obj, dict):
+                _add(ex_obj)
+
+        if 'example' in media_obj:
+            _add(media_obj['example'])
+
+        return examples
+
+    def _collect_request_body_examples(self, request_body: dict) -> list:
+        """Collect all examples from a requestBody object."""
+        examples: list = []
+        for media_obj in request_body.get('content', {}).values():
+            if isinstance(media_obj, dict):
+                examples.extend(self._collect_media_examples(media_obj))
+        return examples
+
+    # ------------------------------------------------------------------
 
     def _format_schema_info(self, schema: dict) -> str:
         """Format schema information for LLM context."""

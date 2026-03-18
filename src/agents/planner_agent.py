@@ -605,20 +605,34 @@ class PlannerAgent(BaseAgent):
     # ------------------------------------------------------------------
 
     def _extract_parameters_with_examples(self, endpoint: Any) -> Dict[str, Any]:
-        """Extract parameters with priority for examples from OpenAPI specification."""
+        """
+        Extract parameters with priority for examples from OpenAPI specification.
+
+        Priority order (highest → lowest):
+        1. ``endpoint.parameter_examples[name]``  — pre-extracted by the parser
+           (covers ``param.example``, ``param.examples``,
+           ``param.x-parameter-examples``, ``param.schema.example``,
+           ``param.schema.examples``)
+        2. ``param.schema.enum[0]``               — first enum value
+        3. Heuristic realistic value              — generated from name/type
+        """
         parameters: Dict[str, Any] = {}
+
+        # Pre-extracted examples map from the parser (may be empty dict)
+        pre_extracted: Dict[str, list] = getattr(endpoint, 'parameter_examples', {})
 
         for param in endpoint.parameters:
             param_name = param.get('name', 'unknown')
             param_schema = param.get('schema', {})
             param_type = param_schema.get('type', 'string')
 
-            if 'example' in param_schema:
-                parameters[param_name] = param_schema['example']
-            elif 'example' in param:
-                parameters[param_name] = param['example']
+            # 1. Use pre-extracted examples (first value is the primary example)
+            if param_name in pre_extracted and pre_extracted[param_name]:
+                parameters[param_name] = pre_extracted[param_name][0]
+            # 2. Enum fallback
             elif 'enum' in param_schema and param_schema['enum']:
                 parameters[param_name] = param_schema['enum'][0]
+            # 3. Heuristic realistic value
             else:
                 parameters[param_name] = self._generate_realistic_value(
                     param_name, param_type
@@ -824,18 +838,64 @@ class PlannerAgent(BaseAgent):
             for s in scenarios
         ]
 
+        # ── Collect spec-level examples to enrich the LLM context ───────────
+        spec_examples: Dict[str, Any] = {}
+        for ep in api_spec.endpoints:
+            ep_key = f"{ep.method} {ep.path}"
+            ep_examples: Dict[str, Any] = {}
+
+            param_ex = getattr(ep, 'parameter_examples', {})
+            if param_ex:
+                ep_examples['parameter_examples'] = param_ex
+
+            resp_ex = getattr(ep, 'response_examples', {})
+            if resp_ex:
+                # Truncate large response bodies to keep the context manageable
+                truncated_resp: Dict[str, Any] = {}
+                for status, ex_list in resp_ex.items():
+                    truncated_resp[status] = [
+                        ex if not isinstance(ex, (dict, list)) else
+                        (ex if len(str(ex)) <= 500 else '<truncated>')
+                        for ex in ex_list[:2]  # at most 2 examples per status
+                    ]
+                ep_examples['response_examples'] = truncated_resp
+
+            rb_ex = getattr(ep, 'request_body_examples', [])
+            if rb_ex:
+                ep_examples['request_body_examples'] = [
+                    ex if not isinstance(ex, (dict, list)) else
+                    (ex if len(str(ex)) <= 500 else '<truncated>')
+                    for ex in rb_ex[:2]
+                ]
+
+            if ep_examples:
+                spec_examples[ep_key] = ep_examples
+
         return {
             'base_url': base_url,
             'api_endpoints': api_endpoints,
             'current_scenarios': scenario_info,
             'api_title': getattr(api_spec, 'title', 'API'),
             'api_description': getattr(api_spec, 'description', ''),
+            'spec_examples': spec_examples,
         }
 
     @staticmethod
     def _build_enhancement_prompt(context: Dict[str, Any]) -> str:
         """Build prompt for LLM scenario enhancement."""
         scenario_count = len(context.get('current_scenarios', []))
+
+        # Build the optional spec-examples block only when examples are present
+        spec_examples = context.get('spec_examples', {})
+        if spec_examples:
+            examples_block = (
+                "\nSpec-Provided Examples (USE THESE VALUES IN YOUR SCENARIOS):\n"
+                + json.dumps(spec_examples, indent=2)
+                + "\n"
+            )
+        else:
+            examples_block = ""
+
         return f"""
 You are an expert API testing specialist. Analyze the following API specification and test scenarios to improve them.
 
@@ -846,7 +906,7 @@ API Information:
 
 API Endpoints (with declared response codes):
 {json.dumps(context['api_endpoints'], indent=2)}
-
+{examples_block}
 Current Test Scenarios ({scenario_count} scenarios – you MUST preserve all of them):
 {json.dumps(context['current_scenarios'], indent=2)}
 
@@ -861,8 +921,14 @@ Your task is to:
    - Only include 5xx scenarios when explicitly declared in the spec
 6. Add dependency information between scenarios
 7. Improve scenario descriptions
-8. Replace generic placeholder values (e.g. "test-value") with domain-realistic values
-   appropriate to the endpoint semantics
+8. IMPORTANT: When the spec provides "parameter_examples" for an endpoint, you MUST use
+   those exact values as the primary test inputs for that parameter. You MAY also create
+   ADDITIONAL scenarios that use alternative values from the examples list (when multiple
+   examples are provided) to maximise coverage.
+9. When the spec provides "response_examples", use them to validate response body structure
+   in the scenario description and test_data fields.
+10. Replace any remaining generic placeholder values (e.g. "test-value") with domain-realistic
+    values appropriate to the endpoint semantics.
 
 Rules:
 - Endpoints must start with valid paths (never with bare path parameters like /{{param}})
@@ -871,6 +937,8 @@ Rules:
 - The output enhanced_scenarios array MUST contain AT LEAST {scenario_count} entries
 - You MUST include an improved version of every input scenario
 - You MAY add new scenarios beyond the {scenario_count} minimum
+- When multiple parameter examples are available, create one scenario per distinct example
+  value to maximise input coverage
 
 Return ONLY a JSON object with this structure:
 {{

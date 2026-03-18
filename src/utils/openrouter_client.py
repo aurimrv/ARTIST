@@ -530,7 +530,7 @@ IMPORTANT: Return ONLY the Java code without any explanations, comments, or mark
         # Format project context
         project_context_str = f"""Project Context:
 - Package: {project_context.get('package_name', 'com.example.tests')}
-- Test Class Name: {project_context.get('class_name', 'ApiIntegrationTest')}
+- Test Class Name: {project_context.get('class_name', 'ApiTest')}
 - Base URL: {project_context.get('base_url', 'http://localhost:8080')}
 - Output Directory: {project_context.get('output_dir', 'output')}
 
@@ -659,7 +659,7 @@ Start directly with the package declaration."""
 
         project_context_str = f"""Project Context:
 - Package: {project_context.get('package_name', 'com.example.tests')}
-- Test Class Name: {project_context.get('class_name', 'ApiIntegrationTest')}
+- Test Class Name: {project_context.get('class_name', 'ApiTest')}
 - Base URL: {project_context.get('base_url', 'http://localhost:8080')}
 
 REQUIREMENTS:

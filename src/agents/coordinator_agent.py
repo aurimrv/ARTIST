@@ -505,11 +505,8 @@ class CoordinatorAgent(BaseAgent):
 
             self.logger.info(f"Group {class_name}: DONE")
 
-        # --- Phase 5: Generate Suite Runner ---
-        self.logger.info(f"[Phase 5] Creating Suite runner ApiIntegrationTest with {len(compiled_groups)} compiled groups")
-        suite_file = self._generate_suite_runner(context, compiled_groups)
-        if suite_file:
-            all_generated_files.append(suite_file)
+        # Phase 5: Suite runner removed — each test class is standalone and self-contained.
+        # ApiIntegrationTest.java is no longer generated.
 
         if failed_groups:
             self.logger.warning(
@@ -598,19 +595,19 @@ class CoordinatorAgent(BaseAgent):
 
     def _clean_test_directory(self, package_dir: Path):
         """
-        Remove all .java test files from the package directory,
-        preserving BaseApiTest.java and TestConfig.java.
+        Remove all .java test files from the package directory.
+
+        No files are preserved: BaseApiTest.java and TestConfig.java are no
+        longer generated, so there is nothing to protect.
         """
-        PRESERVED_FILES = {'BaseApiTest.java', 'TestConfig.java'}
         if not package_dir.exists():
             return
         for java_file in package_dir.glob('*.java'):
-            if java_file.name not in PRESERVED_FILES:
-                try:
-                    java_file.unlink()
-                    self.logger.debug(f"Cleaned test file: {java_file.name}")
-                except Exception as e:
-                    self.logger.warning(f"Could not remove {java_file}: {e}")
+            try:
+                java_file.unlink()
+                self.logger.debug(f"Cleaned test file: {java_file.name}")
+            except Exception as e:
+                self.logger.warning(f"Could not remove {java_file}: {e}")
 
     def _remove_ignore_from_file(self, file_path: Path):
         """
@@ -633,54 +630,9 @@ class CoordinatorAgent(BaseAgent):
         except Exception as e:
             self.logger.warning(f"Failed to remove @Ignore from {file_path}: {e}")
 
-    def _generate_suite_runner(self, context: ProjectContext, compiled_groups: List[str]) -> Optional[Path]:
-        """
-        Deterministically generate ApiIntegrationTest.java as a JUnit 4 Suite runner.
-        Only includes groups that passed Phase 3 (compilation).
-        """
-        try:
-            if not compiled_groups:
-                self.logger.warning("[Phase 5] No compiled groups — Suite runner not generated")
-                return None
-
-            suite_classes = "\n".join(
-                f"    {cls}.class," for cls in compiled_groups
-            )
-            # Remove trailing comma from last line
-            lines = suite_classes.rstrip(',\n').rsplit(',', 1)
-            suite_classes_clean = lines[0] if len(lines) == 1 else lines[0]
-            # Rebuild properly
-            class_lines = [f"    {cls}.class," for cls in compiled_groups]
-            class_lines[-1] = class_lines[-1].rstrip(',')  # remove trailing comma on last
-            suite_classes_str = "\n".join(class_lines)
-
-            suite_content = (
-                f"package {context.package_name};\n\n"
-                f"import org.junit.runner.RunWith;\n"
-                f"import org.junit.runners.Suite;\n\n"
-                f"@RunWith(Suite.class)\n"
-                f"@Suite.SuiteClasses({{\n"
-                f"{suite_classes_str}\n"
-                f"}})\n"
-                f"public class ApiIntegrationTest {{}}\n"
-            )
-
-            from ..templates import MavenProjectTemplate
-            maven_template = MavenProjectTemplate()
-            maven_template.add_test_class(
-                context.maven_project_dir,
-                context.package_name,
-                'ApiIntegrationTest',
-                suite_content
-            )
-            suite_file = maven_template.get_test_class_path(
-                context.maven_project_dir, context.package_name, 'ApiIntegrationTest'
-            )
-            self.logger.info(f"[Phase 5] Created Suite runner ApiIntegrationTest with {len(compiled_groups)} compiled groups")
-            return suite_file
-        except Exception as e:
-            self.log_error("Failed to generate Suite runner", e)
-            return None
+    # _generate_suite_runner has been removed.
+    # ApiIntegrationTest.java is no longer generated because each test class
+    # is standalone and self-contained — no suite runner is needed.
 
     
     async def _run_planning_phase(self, context: ProjectContext) -> List[TestScenario]:
