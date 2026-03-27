@@ -409,20 +409,15 @@ class CoordinatorAgent(BaseAgent):
 
             if not generated_file or not generated_file.exists():
                 self.logger.error(
-                    f"[FATAL] Group {class_name}: generation failed after {max_gen_attempts} attempts — aborting"
+                    f"[FATAL] Group {class_name}: generation failed after {max_gen_attempts} attempts — skipping group"
                 )
                 failed_groups.append(class_name)
-                return GenerationResult(
-                    success=False,
-                    message=(
-                        f"Generation failure for group '{class_name}' after {max_gen_attempts} attempts. "
-                        f"Generation aborted. The LLM could not produce valid Java code for this class."
-                    ),
-                    generated_files=all_generated_files,
-                    compilation_errors=[f"Group {class_name} failed generation — aborting"],
-                    test_failures=[],
-                    ignored_tests=[]
+                # Do NOT abort the whole generation — skip this group and continue
+                self.logger.warning(
+                    f"[SKIP] Group {class_name} skipped (generation failed). "
+                    f"No .java file was produced, so no .err renaming is needed."
                 )
+                continue
 
             all_generated_files.append(generated_file)
 
@@ -456,21 +451,25 @@ class CoordinatorAgent(BaseAgent):
 
             if not compiled_ok:
                 self.logger.error(
-                    f"[FATAL] Group {class_name}: compilation failed after {max_compile_attempts} attempts — aborting generation"
+                    f"[FATAL] Group {class_name}: compilation failed after {max_compile_attempts} attempts — marking as .err"
                 )
                 failed_groups.append(class_name)
-                # Immediately abort: do not continue to next groups
-                return GenerationResult(
-                    success=False,
-                    message=(
-                        f"Compilation failure for group '{class_name}' after {max_compile_attempts} attempts. "
-                        f"Generation aborted. Fix the class '{class_name}' before retrying."
-                    ),
-                    generated_files=all_generated_files,
-                    compilation_errors=[f"Group {class_name} failed compilation — aborting"],
-                    test_failures=[],
-                    ignored_tests=[]
-                )
+                # Rename the .java file to .java.err so it is excluded from
+                # compilation but can be revisited by the tester later.
+                if generated_file and generated_file.exists():
+                    err_path = generated_file.with_suffix('.java.err')
+                    try:
+                        generated_file.rename(err_path)
+                        self.logger.warning(
+                            f"[SKIP] {class_name}: renamed to '{err_path.name}' "
+                            f"— excluded from compilation, available for manual review."
+                        )
+                    except Exception as rename_exc:
+                        self.logger.error(
+                            f"[SKIP] {class_name}: could not rename to .err: {rename_exc}"
+                        )
+                # Continue to the next group — do NOT abort the whole generation
+                continue
 
             compiled_groups.append(class_name)
 
@@ -527,7 +526,8 @@ class CoordinatorAgent(BaseAgent):
 
         if failed_groups:
             self.logger.warning(
-                f"Groups excluded from Suite runner (compilation failed): {', '.join(failed_groups)}"
+                f"Groups excluded from compilation ({len(failed_groups)} total): {', '.join(failed_groups)}. "
+                f"Their .java files were renamed to .java.err for manual review."
             )
 
         success = len(compiled_groups) > 0
@@ -536,13 +536,16 @@ class CoordinatorAgent(BaseAgent):
             f"Suite runner includes: {compiled_groups}."
         )
         if failed_groups:
-            message += f" Failed groups (excluded): {failed_groups}."
+            message += (
+                f" Skipped groups ({len(failed_groups)}): {failed_groups}. "
+                f"Their files were renamed to .java.err and can be reviewed manually."
+            )
 
         return GenerationResult(
             success=success,
             message=message,
             generated_files=all_generated_files,
-            compilation_errors=[f"Group {g} failed compilation" for g in failed_groups],
+            compilation_errors=[f"Group {g} failed — renamed to .java.err" for g in failed_groups],
             test_failures=all_test_failures,
             ignored_tests=all_ignored_tests
         )

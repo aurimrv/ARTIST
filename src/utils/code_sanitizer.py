@@ -30,7 +30,7 @@ class CodeSanitizer(LoggerMixin):
             # Extract code between triple backticks
             code = self._extract_code_blocks(llm_output)
 
-            print(f"#### sanitizer llm_output:{llm_output}")
+            #print(f"#### sanitizer llm_output:{llm_output}")
 
             if not code:
                 self.logger.warning("No code blocks found in LLM output, using fallback extraction")

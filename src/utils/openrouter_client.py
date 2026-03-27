@@ -94,12 +94,12 @@ class OpenRouterClient(LoggerMixin):
         if 'seed' in payload and payload['seed'] is None:
             del payload['seed']
 
-        print("### funcao chat_completion")
-        print(f"#### Model: {payload['model']}")
-        print(f"#### Max_Tokens: {payload['max_tokens']}")
-        print(f"#### Temperature: {payload['temperature']}")
-        if 'seed' in payload:
-            print(f"#### Seed: {payload['seed']}")
+        #print("### funcao chat_completion")
+        #print(f"#### Model: {payload['model']}")
+        #print(f"#### Max_Tokens: {payload['max_tokens']}")
+        #print(f"#### Temperature: {payload['temperature']}")
+        #if 'seed' in payload:
+            #print(f"#### Seed: {payload['seed']}")
 
         self.logger.debug(f"Making chat completion request with model: {model}")
         
