@@ -68,16 +68,17 @@ class MavenProjectTemplate(LoggerMixin):
     </properties>
 
     <dependencies>
-
-        <!-- SUT JAR (api-impl.jar) — required for *Test500.java Mockito/Jersey tests -->
-        <!-- Place the implementation JAR at src/test/resources/api-impl.jar -->
+{% if api_impl_jar_name %}
+        <!-- SUT JAR ({{ api_impl_jar_name }}) — required for *Test500.java Mockito/Jersey tests -->
+        <!-- Copied from --api-impl argument to src/test/resources/{{ api_impl_jar_name }} -->
         <dependency>
             <groupId>com.example</groupId>
             <artifactId>api-impl</artifactId>
             <version>1.0.0</version>
             <scope>system</scope>
-            <systemPath>${project.basedir}/src/test/resources/api-impl.jar</systemPath>
+            <systemPath>${project.basedir}/src/test/resources/{{ api_impl_jar_name }}</systemPath>
         </dependency>
+{% endif %}
 
         <!-- Jersey 2.x Test Framework (javax.ws.rs — for *Test500.java) -->
         <dependency>
@@ -347,14 +348,28 @@ class MavenProjectTemplate(LoggerMixin):
             ensure_directory(project_dir / directory)
 
     def _create_pom_file(self, project_dir: Path, context: ProjectContext, api_info: Dict[str, Any]):
-        """Create the POM file."""
+        """Create the POM file.
+
+        When ``context.api_impl_path`` is set the ``api-impl`` system-scoped
+        dependency is included in the generated pom.xml, referencing the JAR
+        by its **original filename** (e.g. ``my-service-1.0.jar``).  When the
+        path is ``None`` (``--api-impl`` was not supplied) the dependency block
+        is omitted entirely so that Maven does not fail with a missing-file
+        error.
+        """
+        # Derive the JAR filename to embed in the pom.xml (or None to omit).
+        api_impl_jar_name: str | None = None
+        if context.api_impl_path:
+            api_impl_jar_name = context.api_impl_path.name
+
         pom_content = self.pom_template.render(
             group_id=context.package_name,
             artifact_id=f"{context.package_name.split('.')[-1]}-api-tests",
             version="1.0.0",
             project_name=f"{api_info.get('title', 'API')} Integration Tests",
             api_title=api_info.get('title', 'API'),
-            base_url=context.base_url
+            base_url=context.base_url,
+            api_impl_jar_name=api_impl_jar_name
         )
 
         write_file(project_dir / 'pom.xml', pom_content)

@@ -45,6 +45,9 @@ Examples:
 
   # Generate with specific package name (no source code)
   python main.py generate --api-spec api.yaml --output tests/ --package com.example.tests
+
+  # Generate with Mockito/Jersey Test500 classes (requires api-impl.jar)
+  python main.py generate --api-spec api.yaml --output tests/ --api-impl path/to/api-impl.jar
         """
     )
     
@@ -106,6 +109,22 @@ Examples:
         '--class-name',
         type=str,
         help='Main test class name (default: ApiIntegrationTest)'
+    )
+    generate_parser.add_argument(
+        '--api-impl',
+        type=Path,
+        required=False,
+        default=None,
+        help=(
+            'Path to the API implementation JAR file (api-impl.jar or any name). '
+            'Required when the OpenAPI specification documents HTTP 500 responses, '
+            'because the *Test500.java classes use Mockito + Jersey Test Framework '
+            'and need the implementation classes on the test classpath. '
+            'The file will be copied to src/test/resources/ inside the generated '
+            'Maven project and referenced in pom.xml as a system-scoped dependency. '
+            'If omitted, the api-impl dependency block is excluded from pom.xml and '
+            'no *Test500.java classes are generated.'
+        )
     )
     generate_parser.add_argument(
         '--skip-compilation',
@@ -197,6 +216,14 @@ async def generate_command(args: argparse.Namespace) -> int:
             logger.error(f"API source directory not found: {args.api_src}")
             return 1
         
+        if args.api_impl and not args.api_impl.exists():
+            logger.error(f"API implementation JAR not found: {args.api_impl}")
+            return 1
+        
+        if args.api_impl and not args.api_impl.is_file():
+            logger.error(f"--api-impl must point to a file, not a directory: {args.api_impl}")
+            return 1
+        
         # Load configuration
         settings = Settings(args.config)
         system_config = settings.config
@@ -221,7 +248,8 @@ async def generate_command(args: argparse.Namespace) -> int:
             'package_name': context.package_name,
             'main_test_class_name': context.main_test_class_name,
             'skip_compilation': args.skip_compilation,
-            'skip_test_run': args.skip_test_run
+            'skip_test_run': args.skip_test_run,
+            'api_impl_path': str(args.api_impl) if args.api_impl else None
         }
         
         # Run the generation process

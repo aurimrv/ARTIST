@@ -870,6 +870,13 @@ class GeneratorAgent(BaseAgent):
             self.logger.warning("OpenRouter client not available — skipping Test500 generation")
             return []
 
+        if not context.api_impl_path:
+            self.logger.info(
+                "--api-impl not provided: skipping *Test500.java generation. "
+                "Supply --api-impl <path/to/api-impl.jar> to enable Mockito/Jersey 500 tests."
+            )
+            return []
+
         endpoints_by_class = self._collect_500_endpoints_by_class(context)
         if not endpoints_by_class:
             self.logger.info("No endpoints with documented HTTP 500 found — skipping Test500 generation")

@@ -82,7 +82,8 @@ class ProjectContext:
     package_name: str
     main_test_class_name: str
     split_by_endpoint: bool = True
-    
+    api_impl_path: Optional[Path] = None  # Path to the api-impl JAR (--api-impl)
+
     # Derived paths
     generated_test_dir: Optional[Path] = None
     maven_project_dir: Optional[Path] = None

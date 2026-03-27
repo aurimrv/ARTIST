@@ -221,6 +221,7 @@ class CoordinatorAgent(BaseAgent):
         Returns:
             ProjectContext instance
         """
+        api_impl_raw = input_data.get('api_impl_path')
         return ProjectContext(
             base_url=input_data['base_url'],
             api_spec_path=Path(input_data['api_spec_path']),
@@ -228,7 +229,8 @@ class CoordinatorAgent(BaseAgent):
             output_dir=Path(input_data['output_dir']),
             package_name=input_data['package_name'],
             main_test_class_name=input_data['main_test_class_name'],
-            split_by_endpoint=self.system_config.split_by_endpoint
+            split_by_endpoint=self.system_config.split_by_endpoint,
+            api_impl_path=Path(api_impl_raw) if api_impl_raw else None
         )
     
     async def _execute_workflow(self, context: ProjectContext, skip_compilation: bool = False, skip_test_run: bool = False) -> GenerationResult:
@@ -339,6 +341,8 @@ class CoordinatorAgent(BaseAgent):
                     test_failures=[],
                     ignored_tests=[]
                 )
+            # Copy api-impl JAR to src/test/resources if provided
+            self._copy_api_impl_jar(context)
         
         # Group scenarios by endpoint
         endpoint_groups = generator._group_scenarios_by_endpoint(scenarios, context)
@@ -553,6 +557,9 @@ class CoordinatorAgent(BaseAgent):
         """
         Execute the legacy (non-split) workflow: generate all → compile all → run all.
         """
+        # Copy api-impl JAR to src/test/resources if provided
+        self._copy_api_impl_jar(context)
+
         # Step 2: Generation phase
         self.log_progress("Phase 2: Generating test code", 2, 5)
         generated_files = await self._run_generation_phase(context, scenarios)
@@ -658,6 +665,39 @@ class CoordinatorAgent(BaseAgent):
                 self.logger.warning(f"@Ignore removed from {file_path.name} (compiler corrector inserted it illegally)")
         except Exception as e:
             self.logger.warning(f"Failed to remove @Ignore from {file_path}: {e}")
+
+    def _copy_api_impl_jar(self, context: ProjectContext) -> None:
+        """
+        Copy the api-impl JAR provided via ``--api-impl`` into
+        ``src/test/resources/`` of the generated Maven project.
+
+        The file is copied using its **original filename** so that the
+        ``systemPath`` entry in pom.xml can reference it by name.  If
+        ``context.api_impl_path`` is ``None`` (parameter not supplied) this
+        method is a no-op and logs an informational message.
+        """
+        if not context.api_impl_path:
+            self.logger.info(
+                "--api-impl not provided: api-impl JAR will NOT be copied. "
+                "*Test500.java classes will be skipped."
+            )
+            return
+
+        resources_dir = context.maven_project_dir / "src" / "test" / "resources"
+        resources_dir.mkdir(parents=True, exist_ok=True)
+
+        dest = resources_dir / context.api_impl_path.name
+        try:
+            import shutil
+            shutil.copy2(str(context.api_impl_path), str(dest))
+            self.logger.info(
+                f"api-impl JAR copied: {context.api_impl_path} → {dest}"
+            )
+        except Exception as exc:
+            self.logger.error(
+                f"Failed to copy api-impl JAR '{context.api_impl_path}' to "
+                f"'{dest}': {exc}"
+            )
 
     # _generate_suite_runner has been removed.
     # ApiIntegrationTest.java is no longer generated because each test class
