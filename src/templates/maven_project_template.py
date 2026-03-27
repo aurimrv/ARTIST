@@ -70,7 +70,7 @@ class MavenProjectTemplate(LoggerMixin):
     <dependencies>
 {% if api_impl_jar_name %}
         <!-- SUT JAR ({{ api_impl_jar_name }}) — required for *Test500.java Mockito/Jersey tests -->
-        <!-- Copied from --api-impl argument to src/test/resources/{{ api_impl_jar_name }} -->
+        <!-- Copied from api-impl argument to src/test/resources/{{ api_impl_jar_name }} -->
         <dependency>
             <groupId>com.example</groupId>
             <artifactId>api-impl</artifactId>
