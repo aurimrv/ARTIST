@@ -887,6 +887,33 @@ class GeneratorAgent(BaseAgent):
         jar_inventory = get_jar_inventory(context.api_impl_path)
         self.logger.info(f"Inspected api-impl.jar: found {len(jar_inventory)} unique class names")
 
+        # Analyze source code if provided to get real class/method mappings
+        src_analysis_text = ''
+        if context.api_src_path and context.api_src_path.exists():
+            try:
+                from ..utils.src_analyzer import JavaSourceAnalyzer
+                self.logger.info(f"Analyzing API source code at: {context.api_src_path}")
+                analyzer = JavaSourceAnalyzer(context.api_src_path)
+                analyzer.analyze()
+                src_analysis_text = analyzer.format_for_prompt()
+                self.logger.info(
+                    f"Source analysis complete: "
+                    f"{len([c for c in analyzer._classes if c.is_resource])} resource classes, "
+                    f"{len([c for c in analyzer._classes if c.is_singleton])} service classes"
+                )
+                # Enrich endpoint descriptors with real class mappings from source
+                endpoints_by_class = self._enrich_endpoints_with_src(
+                    endpoints_by_class, analyzer
+                )
+                analyzer.cleanup()
+            except Exception as e:
+                self.log_error("Source code analysis failed — falling back to heuristics", e)
+        else:
+            self.logger.info(
+                "--api-src not provided: Test500 classes will use heuristic class names. "
+                "Supply --api-src <path/to/src> for accurate imports."
+            )
+
         generated_files: List[Path] = []
         openapi_context = self._format_openapi_context_for_llm(context)
 
@@ -898,7 +925,8 @@ class GeneratorAgent(BaseAgent):
                 'package_name': context.package_name,
                 'class_name': class_name_500,
                 'base_url': context.base_url,
-                'jar_inventory': jar_inventory,  # Pass the JAR inventory to the LLM
+                'jar_inventory': jar_inventory,
+                'src_analysis': src_analysis_text,  # Real class/method info from source
             }
 
             try:
@@ -934,6 +962,92 @@ class GeneratorAgent(BaseAgent):
                 self.log_error(f"Failed to generate Test500 class {class_name_500}", e)
 
         return generated_files
+
+    def _enrich_endpoints_with_src(
+        self,
+        endpoints_by_class: Dict[str, List[Dict[str, Any]]],
+        analyzer: Any
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Enrich endpoint descriptors with real resource/service class information
+        discovered by the JavaSourceAnalyzer.
+
+        For each endpoint, we try to find the best matching resource class
+        (by @Path annotation) and service class (by singleton pattern) from
+        the analyzed source tree.  When a match is found, the descriptor's
+        'resource_class', 'service_class', and 'service_method' fields are
+        replaced with fully-qualified names from the real source code.
+
+        Args:
+            endpoints_by_class: Mapping produced by _collect_500_endpoints_by_class.
+            analyzer: A fully-analyzed JavaSourceAnalyzer instance.
+
+        Returns:
+            The same mapping with enriched descriptors.
+        """
+        resource_classes = [c for c in analyzer._classes if c.is_resource]
+        singleton_classes = [c for c in analyzer._classes if c.is_singleton]
+
+        if not resource_classes and not singleton_classes:
+            self.logger.warning("Source analysis found no resource or service classes — keeping heuristic names")
+            return endpoints_by_class
+
+        enriched: Dict[str, List[Dict[str, Any]]] = {}
+
+        for class_name, endpoints in endpoints_by_class.items():
+            enriched_endpoints = []
+            for ep in endpoints:
+                ep = dict(ep)  # shallow copy to avoid mutating original
+                ep_path = ep.get('path', '')
+
+                # --- Find best resource class ---
+                best_resource = None
+                best_score = -1
+                for rc in resource_classes:
+                    for jaxrs_path in rc.jaxrs_paths:
+                        # Normalize both paths for comparison
+                        norm_ep = ep_path.strip('/').lower()
+                        norm_jaxrs = jaxrs_path.strip('/').lower()
+                        # Score: length of common prefix
+                        common = 0
+                        for a, b in zip(norm_ep, norm_jaxrs):
+                            if a == b:
+                                common += 1
+                            else:
+                                break
+                        if common > best_score:
+                            best_score = common
+                            best_resource = rc
+
+                if best_resource:
+                    ep['resource_class'] = best_resource.fqn
+                    ep['resource_class_simple'] = best_resource.simple_name
+                    ep['resource_package'] = best_resource.package
+
+                    # --- Find best service class for this resource ---
+                    service = analyzer._find_service_for_resource(best_resource, singleton_classes)
+                    if service:
+                        ep['service_class'] = service.fqn
+                        ep['service_class_simple'] = service.simple_name
+                        ep['service_package'] = service.package
+
+                        # --- Find best service method ---
+                        method_name = ep.get('operation_id', '') or ep.get('service_method', '')
+                        svc_method = analyzer._find_service_method(
+                            service, method_name, ep_path
+                        )
+                        if svc_method:
+                            ep['service_method'] = svc_method.name
+                            ep['service_method_params'] = svc_method.params
+                            ep['service_method_return'] = svc_method.return_type
+
+                enriched_endpoints.append(ep)
+            enriched[class_name] = enriched_endpoints
+
+        self.logger.info(
+            f"Source enrichment complete: {sum(len(v) for v in enriched.values())} endpoint descriptors enriched"
+        )
+        return enriched
 
     def _collect_500_endpoints_by_class(
         self,

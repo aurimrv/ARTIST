@@ -80,18 +80,51 @@ class MavenProjectTemplate(LoggerMixin):
         </dependency>
 {% endif %}
 
-        <!-- Jersey 2.x Test Framework (javax.ws.rs — for *Test500.java) -->
+        <!-- Jersey 2.x Test Framework (javax.ws.rs - for *Test500.java) -->
+        <!--
+            Jersey pulls junit-platform-* transitively, which causes Surefire 3.x
+            to detect JUnit 5 and ignore all @Test annotations from JUnit 4,
+            resulting in 0 tests executed.  We exclude those transitive deps here.
+        -->
         <dependency>
             <groupId>org.glassfish.jersey.test-framework</groupId>
             <artifactId>jersey-test-framework-core</artifactId>
             <version>${jersey.version}</version>
             <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.junit.jupiter</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.junit.platform</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.junit.vintage</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.glassfish.jersey.test-framework.providers</groupId>
             <artifactId>jersey-test-framework-provider-grizzly2</artifactId>
             <version>${jersey.version}</version>
             <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.junit.jupiter</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.junit.platform</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.junit.vintage</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.glassfish.jersey.inject</groupId>
@@ -200,6 +233,19 @@ class MavenProjectTemplate(LoggerMixin):
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>${maven-surefire-plugin.version}</version>
+                <dependencies>
+                    <!--
+                        Force the JUnit 4 provider explicitly.
+                        Without this, Surefire 3.x detects the JUnit Platform
+                        brought transitively by Jersey and ignores all JUnit 4
+                        @Test annotations, resulting in 0 tests executed.
+                    -->
+                    <dependency>
+                        <groupId>org.apache.maven.surefire</groupId>
+                        <artifactId>surefire-junit4</artifactId>
+                        <version>${maven-surefire-plugin.version}</version>
+                    </dependency>
+                </dependencies>
                 <configuration>
                     <includes>
                         <include>**/*Test.java</include>

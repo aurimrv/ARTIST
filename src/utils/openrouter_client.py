@@ -806,15 +806,43 @@ CRITICAL RULES:
         import json as _json
         endpoints_str = _json.dumps(endpoints_500, indent=2, ensure_ascii=False)
 
-        # FIX: Include the JAR inventory in the prompt to ensure correct imports
+        # Build JAR inventory section (compact: only Resource/Service/Rest classes)
         jar_inventory = project_context.get('jar_inventory', {})
         jar_inventory_str = ""
         if jar_inventory:
-            jar_inventory_str = "\nREAL CLASSES FOUND IN api-impl.jar (Use these for imports):\n"
-            for simple_name, full_names in jar_inventory.items():
-                # Only include classes that look like Resources or Services to keep prompt size manageable
-                if simple_name.endswith(('Resource', 'Service', 'Rest', 'Application')):
-                    jar_inventory_str += f"- {simple_name}: {', '.join(full_names)}\n"
+            relevant = {
+                k: v for k, v in jar_inventory.items()
+                if k.endswith(('Resource', 'Service', 'Rest', 'Application', 'Filter'))
+            }
+            if relevant:
+                jar_inventory_str = "\nCLASSES AVAILABLE IN api-impl.jar:\n"
+                for simple_name, full_names in relevant.items():
+                    jar_inventory_str += f"  {simple_name}: {', '.join(full_names)}\n"
+
+        # Build source analysis section (real class/method mappings from --api-src)
+        src_analysis = project_context.get('src_analysis', '')
+        src_analysis_section = ""
+        if src_analysis:
+            src_analysis_section = f"""
+
+=== AUTHORITATIVE SOURCE CODE ANALYSIS ===
+The following information was extracted directly from the API implementation source code.
+You MUST use these exact fully-qualified class names for ALL imports and references.
+Do NOT invent class names. Do NOT use placeholder names like 'V1AlphacodesResource'.
+
+{src_analysis}
+=== END OF SOURCE CODE ANALYSIS ==="""
+
+        # Build the endpoint descriptors section
+        # Each descriptor now contains enriched fields from source analysis:
+        #   resource_class (FQN), service_class (FQN), service_method, service_method_params
+        endpoints_enriched_note = ""
+        if src_analysis:
+            endpoints_enriched_note = (
+                "\nNOTE: The endpoint descriptors below have been enriched with REAL class names "
+                "from the source code analysis above. The 'resource_class' and 'service_class' "
+                "fields contain fully-qualified names that MUST be used verbatim in imports.\n"
+            )
 
         prompt = f"""Generate a JUnit 4 test class that uses JerseyTest + Mockito to simulate
 HTTP 500 responses for the following endpoints.
@@ -826,7 +854,8 @@ Project Context:
 
 {openapi_context}
 {jar_inventory_str}
-
+{src_analysis_section}
+{endpoints_enriched_note}
 Endpoints that document HTTP 500 in the spec:
 {endpoints_str}
 
@@ -839,9 +868,12 @@ For each endpoint above, generate one @Test method that:
 
 The configure() method must register ALL resource classes needed by the endpoints above.
 
-IMPORTANT: The api-impl.jar is available at src/test/resources/api-impl.jar and is on the
-test classpath. Use the REAL fully qualified class names from the 'REAL CLASSES FOUND IN api-impl.jar' list above for all imports.
-If a class (like a Resource or Service) is listed in the JAR inventory, you MUST use its full package name.
+CRITICAL IMPORT RULES:
+- If source code analysis is provided above, use ONLY the class names listed there.
+- If a class appears in the source analysis, use its exact fully-qualified name (FQN) for imports.
+- Do NOT invent class names. Do NOT use placeholder packages like 'com.example.api.resources'.
+- The service class is a singleton: use ServiceClass.getInstance() pattern.
+- The resource class is the JAX-RS @Path annotated class: use it in ResourceConfig.
 
 CRITICAL: Return ONLY the complete Java class starting with the package declaration.
 Do NOT include any explanations, markdown, or code fences."""
