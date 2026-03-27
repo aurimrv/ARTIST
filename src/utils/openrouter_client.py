@@ -34,7 +34,7 @@ class OpenRouterClient(LoggerMixin):
         self.headers = {
             'Authorization': f'Bearer {config.api_key}',
             'Content-Type': 'application/json',
-            'HTTP-Referer': 'https://github.com/api-test-generator',
+            'HTTP-Referer': 'https://github.com/aurimrv/api-test-generator-system',
             'X-Title': 'API Test Generator'
         }
         
@@ -349,6 +349,17 @@ Format the output as a structured JSON with the following schema:
         """
         system_message = """You are an expert Java developer specializing in fixing compilation errors.
 Your task is to analyze compilation errors and provide corrected code that compiles successfully.
+
+ABSOLUTE CONSTRAINT — HTTP STATUS CODES ARE IMMUTABLE:
+The expected HTTP status codes in every @Test method are derived directly from the OpenAPI
+specification and MUST NEVER be changed under any circumstances.
+- Do NOT change any integer status code literal (e.g. 200, 201, 400, 404, 500).
+- Do NOT replace a specific status code with anyOf(), is(), or any flexible matcher.
+- Do NOT change a status code even if it is within the same category (e.g. 400 → 404 is FORBIDDEN).
+- Do NOT use anyOf() for status code assertions under any circumstances.
+- The only permitted fix for a status code assertion is to correct a SYNTAX error in the
+  surrounding Java expression while keeping the integer value identical.
+
 IMPORTANT: Return ONLY the corrected Java code without any explanations or markdown formatting."""
         
         prompt = f"""Fix the compilation errors in the following Java code:
@@ -385,6 +396,11 @@ WHAT NOT TO CHANGE:
 - @Test method content
 - Setup method logic (unless syntax error)
 - Test data or expected results
+- HTTP STATUS CODES: every integer status code literal is derived from the OpenAPI spec
+  and is IMMUTABLE. Do NOT change 200, 201, 400, 404, 500, or any other status code value.
+  Do NOT introduce anyOf() matchers for status codes. Do NOT swap codes within the same
+  category (e.g. 400 → 404 is forbidden). The only allowed fix involving a status code
+  line is correcting a pure SYNTAX error while keeping the integer value identical.
 
 CRITICAL: Return ONLY the corrected Java code that resolves all compilation errors. Do NOT include any explanations, descriptions, or markdown code blocks. Maintain the original functionality and test logic while fixing ONLY syntax and import issues."""
         
@@ -438,32 +454,34 @@ CRITICAL: Return ONLY the corrected Java code that resolves all compilation erro
             "You are an expert test automation engineer specializing in fixing failing API tests.\n\n"
             "Your core principles:\n"
             "- Analyze failure patterns to understand actual API behavior\n"
-            "- Prefer adapting expectations to reality over ignoring tests\n"
+            "- Prefer adapting test LOGIC (request parameters, headers, body) to reality over changing status codes\n"
             "- Apply consistent fixes across similar test patterns\n"
             "- Provide working code that reflects actual API behavior.\n\n"
-            "Status code flexibility guidelines:\n"
-            "- Client errors (4xx): 400↔404↔405↔409 are interchangeable for invalid inputs\n"
-            "- Server errors (5xx): Accept 500/502/503 if consistently returned\n"
-            "- Success codes: 200↔201↔204 acceptable based on operation type\n\n"
-            "STRICT CATEGORY RULE - Status code groupings must NEVER be mixed across categories "
-            "(2xx, 4xx, 5xx) in a single anyOf() assertion. Always pick ONE category based on the "
-            "observed API behavior:\n"
-            "- If the API returns a client error → use only 4xx codes\n"
-            "- If the API returns a server error → use only 5xx codes\n"
-            "- If the API returns success → use only 2xx codes\n\n"
-            "When the actual behavior is ambiguous, prefer the most restrictive and semantically "
-            "correct category for the test scenario (e.g., invalid params → 4xx).\n\n"
-            "Examples of INCORRECT usage:\n"
-            "// WRONG: mixes categories\n"
-            ".statusCode(anyOf(is(200), is(400), is(500)));\n\n"
-            "Examples of CORRECT usage:\n"
-            "// RIGHT: single category for invalid input\n"
-            ".statusCode(anyOf(is(400), is(404), is(405)));\n"
-            "// RIGHT: single category for server-side issues\n"
-            ".statusCode(anyOf(is(500), is(502), is(503)));\n\n"
-            "When changing expected status codes, add explanatory comments:\n"
-            "// API returns {actual} instead of {expected} - {reason}\n\n"
-            "Use @Ignore only for clearly unimplemented endpoints with specific reasons.\n\n"
+            "ABSOLUTE CONSTRAINT \u2014 HTTP STATUS CODES ARE IMMUTABLE:\n"
+            "The expected HTTP status codes in every @Test method are derived directly from the\n"
+            "OpenAPI specification and MUST NEVER be changed under any circumstances.\n"
+            "- Do NOT change any integer status code literal (e.g. 200, 201, 400, 404, 500).\n"
+            "- Do NOT replace a specific status code with anyOf(), is(), or any flexible matcher.\n"
+            "- Do NOT change a status code even within the same category\n"
+            "  (e.g. 400 \u2192 404 is FORBIDDEN, 200 \u2192 201 is FORBIDDEN, 500 \u2192 503 is FORBIDDEN).\n"
+            "- anyOf() is STRICTLY PROHIBITED for status code assertions. Never use it.\n"
+            "- If a test fails because the live server returns a different status code than the spec\n"
+            "  documents, the test is CORRECT and the server is wrong. Do NOT adapt the test to\n"
+            "  match wrong server behavior. Instead, annotate the test with\n"
+            "  @Ignore(\"Server returns X but spec requires Y \u2014 server non-compliant\")\n"
+            "  and keep the original status code assertion intact.\n\n"
+            "WHAT YOU MAY FIX:\n"
+            "- Request construction (wrong URL, missing/incorrect parameters, wrong headers, wrong body)\n"
+            "- Authentication setup (missing tokens, wrong credentials)\n"
+            "- Test data setup (missing prerequisite data, wrong fixture values)\n"
+            "- Response body assertions (field names, data types, JSON path expressions)\n"
+            "- Java syntax and import errors\n\n"
+            "WHAT YOU MUST NEVER CHANGE:\n"
+            "- The integer value of any .statusCode(N) assertion\n"
+            "- The use of anyOf() for status codes (prohibited entirely)\n"
+            "- The HTTP method (GET, POST, PUT, DELETE) of any request\n\n"
+            "Use @Ignore only when a test cannot be fixed without violating the spec constraints,\n"
+            "with a specific reason comment.\n\n"
             # FIX #3: Explicit instruction to never drop @Test methods during correction
             "CRITICAL TEST COUNT RULE: You MUST preserve or increase the total number of @Test "
             "methods. NEVER remove a @Test method. If a test cannot be made to pass reliably, "
@@ -473,16 +491,21 @@ CRITICAL: Return ONLY the corrected Java code that resolves all compilation erro
         
         prompt = (
             f"Fix the test failures in the following Java test code. Analyze the failure patterns\n"
-            f"and adapt the tests to match the actual API behavior:\n\n"
+            f"and adapt the test LOGIC (request construction, test data, body assertions) to match\n"
+            f"the actual API behavior. NEVER change HTTP status code assertions.\n\n"
             f"Java Test Code:\n```java\n{code}\n```\n\n"
             f"Test Failures:\n{failures}\n"
             f"{min_tests_clause}\n"
+            "IMMUTABLE STATUS CODES REMINDER: Before returning your fix, verify that every\n"
+            ".statusCode(N) assertion in the returned code has the EXACT SAME integer N as in\n"
+            "the original code above. If you find yourself wanting to change a status code,\n"
+            "use @Ignore instead and keep the original assertion intact.\n\n"
             "Apply consistent fixes across similar failures and ensure the corrected tests will "
             "pass reliably against the actual API implementation.\n\n"
             "CRITICAL: Return ONLY the corrected Java test code that resolves the test failures. "
             "Do NOT include any explanations, descriptions, or markdown code blocks. "
-            "If a test cannot be fixed reliably, add @Ignore annotation with a clear reason "
-            "but KEEP THE METHOD in the class."
+            "If a test cannot be fixed reliably without changing a status code, add @Ignore "
+            "annotation with a clear reason but KEEP THE METHOD and its original assertions in the class."
         )
 
         kwargs.setdefault("_operation_label", "fix_execution")
@@ -525,6 +548,21 @@ scenarios provided. Each scenario listed in the user prompt MUST have its own de
 Beyond the mandatory minimum, you are expected to ADD extra @Test methods that explore
 boundary values, edge cases, and parameter combinations not explicitly listed.
 
+FULL RETCODE COVERAGE RULE: The OpenAPI specification is the single source of truth for
+expected HTTP status codes. You MUST generate @Test methods for EVERY response status code
+documented in the spec for each endpoint, including:
+- 2xx success codes (200, 201, 204, etc.)
+- 4xx client error codes (400, 401, 403, 404, 405, 409, 422, etc.)
+- 5xx server error codes (500, 502, 503, etc.) when documented in the spec
+Do NOT skip any documented status code. Each documented status code for each endpoint
+MUST have at least one dedicated @Test method.
+
+STATUS CODE IMMUTABILITY RULE: Status codes in @Test assertions are derived from the
+OpenAPI specification and are IMMUTABLE. Use ONLY the exact integer value documented
+in the spec. anyOf() is STRICTLY PROHIBITED for status code assertions. Never use
+anyOf(is(200), is(400)) or any similar construct. Each @Test method asserts exactly
+one specific status code that matches the scenario it is testing.
+
 IMPORTANT: Return ONLY the Java code without any explanations, comments, or markdown formatting."""
         
         # Format project context
@@ -553,6 +591,8 @@ CRITICAL REQUIREMENTS:
 16. ALL @Test methods MUST explicitly declare a timeout of 60000 milliseconds using @Test(timeout = 60000)
 17. MANDATORY COVERAGE: Generate ONE @Test method per scenario. NEVER merge two scenarios into one @Test method. Each scenario in the list MUST map to exactly one (or more) @Test method(s).
 18. EXPAND COVERAGE: After implementing the mandatory @Test methods, add ADDITIONAL @Test methods for boundary values (e.g., zero, negative, maximum, empty string, null) and parameter combinations not listed in the scenarios.
+19. FULL RETCODE COVERAGE: For each endpoint in the spec, you MUST generate @Test methods for ALL documented response status codes. Do NOT skip 4xx or 5xx codes. If the spec documents a 500 response for an endpoint, generate a test that expects exactly 500 (using a request that triggers the error condition if possible, or mark it @Ignore with a clear reason if it cannot be triggered via REST Assured alone).
+20. STATUS CODE IMMUTABILITY: Each .statusCode(N) assertion MUST use the exact integer N from the OpenAPI spec. anyOf() is STRICTLY PROHIBITED for status code assertions. Do NOT use anyOf(is(200), is(201)) or any similar construct. Do NOT change a status code even within the same HTTP category (e.g. 400 vs 404, 200 vs 201).
 
 SETUP AND CLEANUP METHOD REQUIREMENTS:
 - Create a @Before method called setupTestData()
@@ -654,6 +694,13 @@ STRICT SCOPE RULE: Generate ONLY the @Test methods listed in the scenarios below
 Do NOT add extra boundary-value tests or edge-case tests beyond what is specified.
 Keep the class small and complete — truncated output is invalid.
 
+STATUS CODE IMMUTABILITY RULE: Status codes in @Test assertions are derived from the
+OpenAPI specification and are IMMUTABLE.
+- Use ONLY the exact integer value documented in the spec for each scenario.
+- anyOf() is STRICTLY PROHIBITED for status code assertions. Never use anyOf().
+- Do NOT change a status code even within the same HTTP category (400 vs 404, 200 vs 201).
+- Each @Test method asserts exactly one specific status code matching its scenario.
+
 CRITICAL: Return ONLY the Java code. No explanations. No markdown. No code fences.
 Start directly with the package declaration."""
 
@@ -673,6 +720,8 @@ REQUIREMENTS:
 8. Each @Test must use @Test(timeout = 60000)
 9. Validate response body is not null before JsonPath usage (try-catch around JSON parsing)
 10. Generate EXACTLY the scenarios listed — one @Test per scenario, no more
+11. STATUS CODE IMMUTABILITY: Each .statusCode(N) assertion uses the EXACT integer N from the
+    scenario's expected_status field. anyOf() is FORBIDDEN. Do NOT change any status code value.
 
 IMPORTS REQUIRED:
 - import static io.restassured.RestAssured.*;
@@ -695,6 +744,97 @@ closing brace `}}` of the public class declaration.
 Return ONLY the Java class code starting with the package declaration."""
 
         kwargs.setdefault("_operation_label", "generate_tests_focused")
+        return await self.generate_text(
+            prompt=prompt,
+            model=model,
+            system_message=system_message,
+            **kwargs
+        )
+
+    async def generate_test500_code(
+        self,
+        endpoints_500: list,
+        project_context: dict,
+        openapi_context: str,
+        model: str,
+        **kwargs
+    ) -> str:
+        """
+        Generate a JUnit 4 test class using Mockito and Jersey Test Framework to
+        simulate HTTP 500 Internal Server Error responses for endpoints that document
+        a 500 response code in the OpenAPI specification.
+
+        The generated class:
+        - Extends JerseyTest
+        - Overrides configure() to register the real JAX-RS resource class
+        - Uses MockedStatic<ServiceClass> to make the service throw RuntimeException
+        - Asserts that the response status is exactly 500
+        - Is named with the suffix '500' before '.java' (e.g. V1AlphaTest500)
+
+        Args:
+            endpoints_500: List of dicts with keys:
+                           'path', 'method', 'resource_class', 'service_class',
+                           'service_method', 'path_params', 'query_params'
+            project_context: Dict with 'package_name', 'class_name' (already has 500 suffix),
+                             'base_url'
+            openapi_context: Formatted OpenAPI context string
+            model: Model name to use
+            **kwargs: Additional parameters
+
+        Returns:
+            Generated Java test class content as a string
+        """
+        system_message = """You are an expert Java developer specializing in test automation with
+Mockito and Jersey Test Framework.
+Your task is to generate a JUnit 4 test class that uses JerseyTest + MockedStatic to simulate
+HTTP 500 Internal Server Error responses.
+
+CRITICAL RULES:
+1. The class MUST extend JerseyTest.
+2. Override configure() to return new ResourceConfig(ResourceClass.class).
+3. Each @Test method MUST use MockedStatic to make the service class throw RuntimeException.
+4. Each @Test method MUST assert .statusCode(500) — exactly 500, never anything else.
+5. anyOf() is STRICTLY PROHIBITED. Never use anyOf() for status code assertions.
+6. Use JUnit 4 (@Test, NOT @org.junit.jupiter.api.Test).
+7. Java 8 compatibility — no var, no lambda in complex contexts.
+8. The test class name MUST match the class_name in the project context exactly.
+9. Import org.mockito.MockedStatic and org.mockito.Mockito.
+10. Import javax.ws.rs.core.Application and javax.ws.rs.core.Response.
+11. Assume api-impl.jar is on the classpath — import the real resource and service classes.
+12. Return ONLY the Java code. No explanations. No markdown. No code fences."""
+
+        import json as _json
+        endpoints_str = _json.dumps(endpoints_500, indent=2, ensure_ascii=False)
+
+        prompt = f"""Generate a JUnit 4 test class that uses JerseyTest + Mockito to simulate
+HTTP 500 responses for the following endpoints.
+
+Project Context:
+- Package: {project_context.get('package_name', 'com.example.api.tests')}
+- Test Class Name: {project_context.get('class_name', 'ApiTest500')}
+  (this name MUST be used as the public class name — it already has the '500' suffix)
+
+{openapi_context}
+
+Endpoints that document HTTP 500 in the spec:
+{endpoints_str}
+
+For each endpoint above, generate one @Test method that:
+1. Opens a MockedStatic<ServiceClass> block.
+2. Creates a mock of ServiceClass and makes getInstance() return it.
+3. Configures the relevant service method to throw new RuntimeException("Simulated error").
+4. Calls the endpoint via target(path).queryParam(...).request().get() (or post/put/delete).
+5. Asserts assertEquals(500, response.getStatus()).
+
+The configure() method must register ALL resource classes needed by the endpoints above.
+
+IMPORTANT: The api-impl.jar is available at src/test/resources/api-impl.jar and is on the
+test classpath. Use the real resource and service class names from the endpoints list above.
+
+CRITICAL: Return ONLY the complete Java class starting with the package declaration.
+Do NOT include any explanations, markdown, or code fences."""
+
+        kwargs.setdefault("_operation_label", "generate_tests_500")
         return await self.generate_text(
             prompt=prompt,
             model=model,

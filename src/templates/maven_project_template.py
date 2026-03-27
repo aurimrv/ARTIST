@@ -30,6 +30,7 @@ class MavenProjectTemplate(LoggerMixin):
         self.logger.info("Initializing Maven project template")
 
         # POM template for Java 8 compatibility
+        # Includes Mockito + Jersey Test Framework for *Test500.java classes
         self.pom_template = Template('''<?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -57,6 +58,8 @@ class MavenProjectTemplate(LoggerMixin):
         <jackson.version>2.13.4</jackson.version>
         <slf4j.version>1.7.36</slf4j.version>
         <logback.version>1.2.12</logback.version>
+        <jersey.version>2.40</jersey.version>
+        <mockito.version>5.11.0</mockito.version>
 
         <!-- Plugin versions -->
         <maven-compiler-plugin.version>3.8.1</maven-compiler-plugin.version>
@@ -65,6 +68,45 @@ class MavenProjectTemplate(LoggerMixin):
     </properties>
 
     <dependencies>
+
+        <!-- SUT JAR (api-impl.jar) — required for *Test500.java Mockito/Jersey tests -->
+        <!-- Place the implementation JAR at src/test/resources/api-impl.jar -->
+        <dependency>
+            <groupId>com.example</groupId>
+            <artifactId>api-impl</artifactId>
+            <version>1.0.0</version>
+            <scope>system</scope>
+            <systemPath>${project.basedir}/src/test/resources/api-impl.jar</systemPath>
+        </dependency>
+
+        <!-- Jersey 2.x Test Framework (javax.ws.rs — for *Test500.java) -->
+        <dependency>
+            <groupId>org.glassfish.jersey.test-framework</groupId>
+            <artifactId>jersey-test-framework-core</artifactId>
+            <version>${jersey.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.glassfish.jersey.test-framework.providers</groupId>
+            <artifactId>jersey-test-framework-provider-grizzly2</artifactId>
+            <version>${jersey.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.glassfish.jersey.inject</groupId>
+            <artifactId>jersey-hk2</artifactId>
+            <version>${jersey.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Mockito (for *Test500.java MockedStatic) -->
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <version>${mockito.version}</version>
+            <scope>test</scope>
+        </dependency>
+
         <!-- JUnit 4 -->
         <dependency>
             <groupId>junit</groupId>
@@ -126,6 +168,14 @@ class MavenProjectTemplate(LoggerMixin):
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>
             <version>${logback.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Log4j 1.x (may be required by SUT classes loaded from api-impl.jar) -->
+        <dependency>
+            <groupId>log4j</groupId>
+            <artifactId>log4j</artifactId>
+            <version>1.2.17</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

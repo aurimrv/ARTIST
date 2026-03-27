@@ -839,6 +839,234 @@ class GeneratorAgent(BaseAgent):
         
         return schema_info if schema_info else "unknown schema"
 
+    # ------------------------------------------------------------------
+    # HTTP 500 Test Generation (Mockito + Jersey)
+    # ------------------------------------------------------------------
+
+    async def generate_test500_classes(
+        self,
+        context: ProjectContext
+    ) -> List[Path]:
+        """
+        Detect all endpoints in the OpenAPI spec that document a 500 response,
+        then generate one *Test500.java file per test-class group using
+        Mockito + Jersey Test Framework.
+
+        The generated files are placed alongside the regular test classes in
+        the same Maven project directory.  Their names follow the same
+        endpoint-to-class-name convention used for regular tests, but with
+        the suffix '500' inserted before '.java'.
+
+        For example, if the regular class is ``V1AlphaTest``, the 500 class
+        will be ``V1AlphaTest500``.
+
+        Args:
+            context: Project context (must have api_spec_path set)
+
+        Returns:
+            List of generated file paths (may be empty if no 500 endpoints found)
+        """
+        if not self.openrouter_client:
+            self.logger.warning("OpenRouter client not available — skipping Test500 generation")
+            return []
+
+        endpoints_by_class = self._collect_500_endpoints_by_class(context)
+        if not endpoints_by_class:
+            self.logger.info("No endpoints with documented HTTP 500 found — skipping Test500 generation")
+            return []
+
+        generated_files: List[Path] = []
+        openapi_context = self._format_openapi_context_for_llm(context)
+
+        for class_name, endpoints in endpoints_by_class.items():
+            class_name_500 = class_name.replace('Test', 'Test500') if 'Test' in class_name else class_name + '500'
+            self.logger.info(f"Generating Test500 class: {class_name_500} ({len(endpoints)} endpoints)")
+
+            project_context_dict = {
+                'package_name': context.package_name,
+                'class_name': class_name_500,
+                'base_url': context.base_url,
+            }
+
+            try:
+                test_content = await self.openrouter_client.generate_test500_code(
+                    endpoints_500=endpoints,
+                    project_context=project_context_dict,
+                    openapi_context=openapi_context,
+                    model=self.get_model_name(),
+                    max_tokens=self.get_max_tokens(),
+                    temperature=self.get_temperature(),
+                    seed=self.get_seed()
+                )
+
+                if test_content:
+                    test_content = self.code_sanitizer.sanitize_java_code(test_content)
+
+                if test_content and self._is_valid_java_code_500(test_content):
+                    self.maven_template.add_test_class(
+                        context.maven_project_dir,
+                        context.package_name,
+                        class_name_500,
+                        test_content
+                    )
+                    file_path = self.maven_template.get_test_class_path(
+                        context.maven_project_dir, context.package_name, class_name_500
+                    )
+                    generated_files.append(file_path)
+                    self.logger.info(f"Generated Test500 class: {file_path}")
+                else:
+                    self.logger.error(f"LLM generated invalid Java code for {class_name_500}")
+
+            except Exception as e:
+                self.log_error(f"Failed to generate Test500 class {class_name_500}", e)
+
+        return generated_files
+
+    def _collect_500_endpoints_by_class(
+        self,
+        context: ProjectContext
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Parse the OpenAPI spec and return a mapping of test-class-name to
+        a list of endpoint descriptors for endpoints that document HTTP 500.
+
+        Each endpoint descriptor is a dict with keys:
+          path, method, resource_class, service_class, service_method,
+          path_params, query_params, operation_id
+        """
+        import json
+        import re
+        from collections import OrderedDict
+
+        result: Dict[str, List[Dict[str, Any]]] = OrderedDict()
+
+        try:
+            spec_path = context.api_spec_path
+            if not spec_path or not spec_path.exists():
+                self.logger.warning("api_spec_path not set or file not found — cannot detect 500 endpoints")
+                return result
+
+            with open(spec_path, 'r', encoding='utf-8') as f:
+                spec = json.load(f)
+
+            spec_endpoints = list(spec.get('paths', {}).keys())
+
+            for path, methods in spec.get('paths', {}).items():
+                for method, operation in methods.items():
+                    if not isinstance(operation, dict):
+                        continue
+                    responses = operation.get('responses', {})
+                    if '500' not in responses and 500 not in responses:
+                        continue
+
+                    # Derive class names from the endpoint path
+                    normalized = self._normalize_endpoint(path, spec_endpoints)
+                    class_name = self._endpoint_to_class_name(normalized)
+
+                    # Infer resource/service class names from operationId or path
+                    operation_id = operation.get('operationId', '')
+                    resource_class = self._infer_resource_class(path, operation_id, context.package_name)
+                    service_class = self._infer_service_class(path, operation_id, context.package_name)
+                    service_method = self._infer_service_method(operation_id, method, path)
+
+                    # Collect parameters
+                    path_params = [
+                        p['name'] for p in operation.get('parameters', [])
+                        if p.get('in') == 'path'
+                    ]
+                    query_params = [
+                        p['name'] for p in operation.get('parameters', [])
+                        if p.get('in') == 'query'
+                    ]
+
+                    descriptor = {
+                        'path': path,
+                        'method': method.upper(),
+                        'operation_id': operation_id,
+                        'resource_class': resource_class,
+                        'service_class': service_class,
+                        'service_method': service_method,
+                        'path_params': path_params,
+                        'query_params': query_params,
+                    }
+
+                    result.setdefault(class_name, []).append(descriptor)
+
+        except Exception as e:
+            self.log_error("Failed to collect 500 endpoints from spec", e)
+
+        return result
+
+    @staticmethod
+    def _infer_resource_class(path: str, operation_id: str, package_name: str) -> str:
+        """
+        Infer a plausible JAX-RS resource class name from the endpoint path or operationId.
+        Falls back to a generic name if nothing better can be derived.
+        """
+        import re
+        # Try operationId first: e.g. 'getAlpha' -> 'AlphaResource'
+        if operation_id:
+            # Strip leading verb (get/post/put/delete/create/update/list/find)
+            name = re.sub(r'^(get|post|put|delete|create|update|list|find|fetch)', '', operation_id, flags=re.IGNORECASE)
+            if name:
+                return name[0].upper() + name[1:] + 'Resource'
+
+        # Fall back to path segments
+        segs = [s for s in path.split('/') if s and not (s.startswith('{') and s.endswith('}'))]
+        if segs:
+            return ''.join(s.capitalize() for s in segs[-2:]) + 'Resource'
+        return 'ApiResource'
+
+    @staticmethod
+    def _infer_service_class(path: str, operation_id: str, package_name: str) -> str:
+        """Infer a plausible service class name."""
+        import re
+        if operation_id:
+            name = re.sub(r'^(get|post|put|delete|create|update|list|find|fetch)', '', operation_id, flags=re.IGNORECASE)
+            if name:
+                return name[0].upper() + name[1:] + 'Service'
+        segs = [s for s in path.split('/') if s and not (s.startswith('{') and s.endswith('}'))]
+        if segs:
+            return ''.join(s.capitalize() for s in segs[-2:]) + 'Service'
+        return 'ApiService'
+
+    @staticmethod
+    def _infer_service_method(operation_id: str, http_method: str, path: str) -> str:
+        """Infer a plausible service method name."""
+        if operation_id:
+            return operation_id
+        segs = [s for s in path.split('/') if s and not (s.startswith('{') and s.endswith('}'))]
+        suffix = ''.join(s.capitalize() for s in segs[-1:]) if segs else 'Resource'
+        return http_method.lower() + suffix
+
+    def _is_valid_java_code_500(self, code: str) -> bool:
+        """
+        Validate generated Test500 Java code structure.
+        Relaxed variant: does NOT require Rest Assured imports (uses Jersey client instead).
+        """
+        if not code or not code.strip():
+            return False
+
+        required_elements = ['package ', 'import ', 'public class ', '@Test']
+        for element in required_elements:
+            if element not in code:
+                self.logger.warning(f"Test500: Missing required element: {element}")
+                return False
+
+        # Must extend JerseyTest
+        if 'JerseyTest' not in code:
+            self.logger.warning("Test500: Missing JerseyTest base class")
+            return False
+
+        # Must have balanced braces
+        if code.count('{') != code.count('}'):
+            self.logger.warning("Test500: Unbalanced braces")
+            return False
+
+        return True
+
+    # ------------------------------------------------------------------
+
     def _is_valid_java_code(self, code: str) -> bool:
         """
         Enhanced validation of Java code structure.

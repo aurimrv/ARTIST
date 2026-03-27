@@ -505,8 +505,21 @@ class CoordinatorAgent(BaseAgent):
 
             self.logger.info(f"Group {class_name}: DONE")
 
-        # Phase 5: Suite runner removed — each test class is standalone and self-contained.
-        # ApiIntegrationTest.java is no longer generated.
+        # Phase 5: Generate *Test500.java files for endpoints with documented HTTP 500
+        self.log_progress("Phase 5: Generating Mockito/Jersey Test500 classes", 5, 6)
+        if generator:
+            try:
+                test500_files = await generator.generate_test500_classes(context)
+                if test500_files:
+                    self.logger.info(
+                        f"[Phase 5] Generated {len(test500_files)} Test500 class(es): "
+                        + ", ".join(f.name for f in test500_files)
+                    )
+                    all_generated_files.extend(test500_files)
+                else:
+                    self.logger.info("[Phase 5] No Test500 classes generated (no 500 endpoints found or generation skipped)")
+            except Exception as e:
+                self.logger.warning(f"[Phase 5] Test500 generation failed (non-fatal): {e}")
 
         if failed_groups:
             self.logger.warning(
@@ -554,6 +567,22 @@ class CoordinatorAgent(BaseAgent):
                 ignored_tests=[]
             )
         
+        # Step 2b: Generate *Test500.java files for endpoints with documented HTTP 500
+        generator = self._agents.get('generator')
+        if generator:
+            try:
+                test500_files = await generator.generate_test500_classes(context)
+                if test500_files:
+                    self.logger.info(
+                        f"Generated {len(test500_files)} Test500 class(es): "
+                        + ", ".join(f.name for f in test500_files)
+                    )
+                    generated_files.extend(test500_files)
+                else:
+                    self.logger.info("No Test500 classes generated (no 500 endpoints found or generation skipped)")
+            except Exception as e:
+                self.logger.warning(f"Test500 generation failed (non-fatal): {e}")
+
         # Step 3: Compilation correction phase
         self.log_progress("Phase 3: Checking and fixing compilation errors", 3, 5)
         if skip_compilation:
