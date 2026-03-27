@@ -882,6 +882,11 @@ class GeneratorAgent(BaseAgent):
             self.logger.info("No endpoints with documented HTTP 500 found — skipping Test500 generation")
             return []
 
+        # Inspect the JAR to find real class names and packages
+        from ..utils.jar_utils import get_jar_inventory
+        jar_inventory = get_jar_inventory(context.api_impl_path)
+        self.logger.info(f"Inspected api-impl.jar: found {len(jar_inventory)} unique class names")
+
         generated_files: List[Path] = []
         openapi_context = self._format_openapi_context_for_llm(context)
 
@@ -893,6 +898,7 @@ class GeneratorAgent(BaseAgent):
                 'package_name': context.package_name,
                 'class_name': class_name_500,
                 'base_url': context.base_url,
+                'jar_inventory': jar_inventory,  # Pass the JAR inventory to the LLM
             }
 
             try:

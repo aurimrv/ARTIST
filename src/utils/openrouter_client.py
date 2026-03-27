@@ -806,6 +806,16 @@ CRITICAL RULES:
         import json as _json
         endpoints_str = _json.dumps(endpoints_500, indent=2, ensure_ascii=False)
 
+        # FIX: Include the JAR inventory in the prompt to ensure correct imports
+        jar_inventory = project_context.get('jar_inventory', {})
+        jar_inventory_str = ""
+        if jar_inventory:
+            jar_inventory_str = "\nREAL CLASSES FOUND IN api-impl.jar (Use these for imports):\n"
+            for simple_name, full_names in jar_inventory.items():
+                # Only include classes that look like Resources or Services to keep prompt size manageable
+                if simple_name.endswith(('Resource', 'Service', 'Rest', 'Application')):
+                    jar_inventory_str += f"- {simple_name}: {', '.join(full_names)}\n"
+
         prompt = f"""Generate a JUnit 4 test class that uses JerseyTest + Mockito to simulate
 HTTP 500 responses for the following endpoints.
 
@@ -815,6 +825,7 @@ Project Context:
   (this name MUST be used as the public class name — it already has the '500' suffix)
 
 {openapi_context}
+{jar_inventory_str}
 
 Endpoints that document HTTP 500 in the spec:
 {endpoints_str}
@@ -829,7 +840,8 @@ For each endpoint above, generate one @Test method that:
 The configure() method must register ALL resource classes needed by the endpoints above.
 
 IMPORTANT: The api-impl.jar is available at src/test/resources/api-impl.jar and is on the
-test classpath. Use the real resource and service class names from the endpoints list above.
+test classpath. Use the REAL fully qualified class names from the 'REAL CLASSES FOUND IN api-impl.jar' list above for all imports.
+If a class (like a Resource or Service) is listed in the JAR inventory, you MUST use its full package name.
 
 CRITICAL: Return ONLY the complete Java class starting with the package declaration.
 Do NOT include any explanations, markdown, or code fences."""
