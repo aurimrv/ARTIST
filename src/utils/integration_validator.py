@@ -101,7 +101,7 @@ class IntegrationValidator(LoggerMixin):
             
             # Test basic text generation
             try:
-                print(f"### _validate_openrouter_api temperature: {temperature}")
+                #print(f"### _validate_openrouter_api temperature: {temperature}")
                 response = await client.generate_text(
                     prompt="Test prompt",
                     model=self.system_config.openrouter.default_model,

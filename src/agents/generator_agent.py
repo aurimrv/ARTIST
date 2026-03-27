@@ -1003,12 +1003,12 @@ class GeneratorAgent(BaseAgent):
                 # --- Find best resource class ---
                 best_resource = None
                 best_score = -1
+                norm_ep = ep_path.strip('/').lower()
+
                 for rc in resource_classes:
+                    # Strategy 1: match by @Path annotation (highest confidence)
                     for jaxrs_path in rc.jaxrs_paths:
-                        # Normalize both paths for comparison
-                        norm_ep = ep_path.strip('/').lower()
                         norm_jaxrs = jaxrs_path.strip('/').lower()
-                        # Score: length of common prefix
                         common = 0
                         for a, b in zip(norm_ep, norm_jaxrs):
                             if a == b:
@@ -1018,6 +1018,23 @@ class GeneratorAgent(BaseAgent):
                         if common > best_score:
                             best_score = common
                             best_resource = rc
+
+                    # Strategy 2: version-based fallback for inferred classes
+                    # (e.g. CountryRestV1 has no @Path but handles /v1/* endpoints)
+                    if not rc.jaxrs_paths and rc.is_inferred:
+                        rc_name_lower = rc.simple_name.lower()
+                        rc_pkg_lower = rc.package.lower()
+                        # Detect version tag from class name or package
+                        for vtag in ['v1', 'v2', 'v3', 'v4']:
+                            if vtag in rc_name_lower or vtag in rc_pkg_lower:
+                                # Check if endpoint path contains this version prefix
+                                if f'/{vtag}/' in ep_path.lower() or norm_ep.startswith(vtag + '/'):
+                                    # Score: length of version tag + 1 (lower than explicit @Path match)
+                                    version_score = len(vtag) + 1
+                                    if version_score > best_score:
+                                        best_score = version_score
+                                        best_resource = rc
+                                    break
 
                 if best_resource:
                     ep['resource_class'] = best_resource.fqn

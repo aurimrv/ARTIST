@@ -785,23 +785,54 @@ Return ONLY the Java class code starting with the package declaration."""
             Generated Java test class content as a string
         """
         system_message = """You are an expert Java developer specializing in test automation with
-Mockito and Jersey Test Framework.
+Mockito and Jersey Test Framework 2.x (org.glassfish.jersey).
 Your task is to generate a JUnit 4 test class that uses JerseyTest + MockedStatic to simulate
 HTTP 500 Internal Server Error responses.
 
-CRITICAL RULES:
-1. The class MUST extend JerseyTest.
+=== MANDATORY JERSEY 2.x IMPORTS (NEVER use com.sun.jersey.*) ===
+The project uses Jersey 2.x. You MUST use these exact imports:
+  import org.glassfish.jersey.server.ResourceConfig;
+  import org.glassfish.jersey.test.JerseyTest;
+  import org.glassfish.jersey.test.TestProperties;
+NEVER import from com.sun.jersey.* — that is Jersey 1.x and will cause compilation errors.
+The configure() method MUST return a ResourceConfig, NOT a WebAppDescriptor or AppDescriptor.
+
+=== MANDATORY RULES ===
+1. The class MUST extend org.glassfish.jersey.test.JerseyTest.
 2. Override configure() to return new ResourceConfig(ResourceClass.class).
-3. Each @Test method MUST use MockedStatic to make the service class throw RuntimeException.
-4. Each @Test method MUST assert .statusCode(500) — exactly 500, never anything else.
-5. anyOf() is STRICTLY PROHIBITED. Never use anyOf() for status code assertions.
-6. Use JUnit 4 (@Test, NOT @org.junit.jupiter.api.Test).
-7. Java 8 compatibility — no var, no lambda in complex contexts.
-8. The test class name MUST match the class_name in the project context exactly.
-9. Import org.mockito.MockedStatic and org.mockito.Mockito.
-10. Import javax.ws.rs.core.Application and javax.ws.rs.core.Response.
-11. Assume api-impl.jar is on the classpath — import the real resource and service classes.
-12. Return ONLY the Java code. No explanations. No markdown. No code fences."""
+   The return type MUST be ResourceConfig (NOT Application or AppDescriptor).
+3. Use target(path).request().get(Response.class) to call endpoints — NOT resource().path(...).
+4. Each @Test method MUST use MockedStatic to make the service class throw RuntimeException.
+5. Each @Test method MUST assert assertEquals(500, response.getStatus()) — exactly 500.
+6. anyOf() is STRICTLY PROHIBITED. Never use anyOf() for status code assertions.
+7. Use JUnit 4 annotations: @Test from org.junit.Test, @Before, @After.
+   NEVER use @org.junit.jupiter.api.Test (that is JUnit 5).
+8. Java 8 compatibility — no var keyword, no complex lambda expressions.
+9. The test class name MUST match the class_name in the project context exactly.
+10. Import org.mockito.MockedStatic and org.mockito.Mockito.
+
+=== IMPORT CONFLICT RESOLUTION (CRITICAL) ===
+When two classes share the same simple name (e.g., CountryService exists in both v1 and v2):
+  - DO NOT import both. DO NOT use 'import X as Y' (Java does not support import aliases).
+  - Instead: import ONLY the one needed for this specific test class.
+  - For any other class with the same simple name, use its FULLY QUALIFIED NAME (FQN) inline
+    in the code (e.g., eu.fayder.restcountries.v2.rest.CountryService.getInstance()).
+  - This is the ONLY valid Java approach for name disambiguation.
+
+=== USING ONLY REAL CLASSES ===
+You MUST use ONLY the classes listed in the source code analysis or JAR inventory below.
+DO NOT invent class names like 'V1AlphacodesResource', 'V1LangResource', etc.
+If a resource class is not listed, use the closest real JAX-RS resource class available.
+
+=== STRING ESCAPING IN ANNOTATIONS ===
+When writing string literals inside Java annotations (e.g., @Ignore("...")), use a SINGLE
+backslash to escape inner double quotes: @Ignore("The \"code\" param was not found").
+DO NOT use double backslash (\\" is WRONG — it produces a literal backslash in the string).
+
+=== RETURN FORMAT ===
+Return ONLY the complete Java class starting with 'package ...'.
+Do NOT include any explanations, markdown, or code fences (no ```).
+"""
 
         import json as _json
         endpoints_str = _json.dumps(endpoints_500, indent=2, ensure_ascii=False)
@@ -844,8 +875,38 @@ Do NOT invent class names. Do NOT use placeholder names like 'V1AlphacodesResour
                 "fields contain fully-qualified names that MUST be used verbatim in imports.\n"
             )
 
-        prompt = f"""Generate a JUnit 4 test class that uses JerseyTest + Mockito to simulate
-HTTP 500 responses for the following endpoints.
+        # Detect classes with conflicting simple names across different packages
+        # (e.g., CountryService in both v1 and v2) — these must be referenced by FQN
+        conflict_warning = ""
+        if src_analysis:
+            # Extract all FQNs from the src_analysis string to detect name conflicts
+            import re as _re
+            fqn_pattern = _re.compile(r'([a-z][\w.]+\.([A-Z][\w]+))')
+            fqn_matches = fqn_pattern.findall(src_analysis)
+            simple_to_fqns: dict = {}
+            for fqn, simple in fqn_matches:
+                simple_to_fqns.setdefault(simple, set()).add(fqn)
+            conflicts = {s: list(fqns) for s, fqns in simple_to_fqns.items() if len(fqns) > 1}
+            if conflicts:
+                conflict_lines = []
+                for simple, fqns in conflicts.items():
+                    conflict_lines.append(
+                        f"  '{simple}' exists in multiple packages: {', '.join(sorted(fqns))}"
+                    )
+                conflict_warning = (
+                    "\n=== AMBIGUOUS CLASS NAMES (REQUIRE FQN IN CODE) ===\n"
+                    "The following class names exist in MULTIPLE packages.\n"
+                    "For these classes:\n"
+                    "  - Import ONLY the one most relevant to this test class's API version.\n"
+                    "  - Reference any other version using its FULL QUALIFIED NAME inline in code.\n"
+                    "  - NEVER write 'import X as Y' — Java has no import aliases.\n"
+                    "Ambiguous classes:\n"
+                    + "\n".join(conflict_lines)
+                    + "\n=== END AMBIGUOUS CLASSES ===\n"
+                )
+
+        prompt = f"""Generate a JUnit 4 test class using Jersey 2.x (org.glassfish.jersey) and
+Mockito to simulate HTTP 500 responses for the following endpoints.
 
 Project Context:
 - Package: {project_context.get('package_name', 'com.example.api.tests')}
@@ -855,6 +916,7 @@ Project Context:
 {openapi_context}
 {jar_inventory_str}
 {src_analysis_section}
+{conflict_warning}
 {endpoints_enriched_note}
 Endpoints that document HTTP 500 in the spec:
 {endpoints_str}
@@ -863,20 +925,33 @@ For each endpoint above, generate one @Test method that:
 1. Opens a MockedStatic<ServiceClass> block.
 2. Creates a mock of ServiceClass and makes getInstance() return it.
 3. Configures the relevant service method to throw new RuntimeException("Simulated error").
-4. Calls the endpoint via target(path).queryParam(...).request().get() (or post/put/delete).
+4. Calls the endpoint via target(path).request().get(Response.class) (Jersey 2.x API).
+   Use target("/v1/alpha").queryParam("codes", "US").request().get(Response.class).
+   NEVER use resource().path(...) — that is Jersey 1.x API and does not exist in Jersey 2.x.
 5. Asserts assertEquals(500, response.getStatus()).
 
-The configure() method must register ALL resource classes needed by the endpoints above.
+The configure() method must:
+- Return a ResourceConfig (NOT Application, NOT AppDescriptor).
+- Register ALL resource classes needed by the endpoints above.
+- Use: return new ResourceConfig(RealResourceClass.class);
 
 CRITICAL IMPORT RULES:
-- If source code analysis is provided above, use ONLY the class names listed there.
-- If a class appears in the source analysis, use its exact fully-qualified name (FQN) for imports.
-- Do NOT invent class names. Do NOT use placeholder packages like 'com.example.api.resources'.
+- Use ONLY classes listed in the source code analysis or JAR inventory above.
+- DO NOT invent class names (no 'V1AlphacodesResource', no 'V1LangResource', etc.).
+- DO NOT use 'import X as Y' — Java has no import alias syntax.
+- When a class name is ambiguous (same simple name in multiple packages), import ONLY ONE
+  and use the FULLY QUALIFIED NAME (FQN) for the other one directly in the code body.
 - The service class is a singleton: use ServiceClass.getInstance() pattern.
-- The resource class is the JAX-RS @Path annotated class: use it in ResourceConfig.
+- The resource class is the JAX-RS @Path annotated class: register it in ResourceConfig.
 
-CRITICAL: Return ONLY the complete Java class starting with the package declaration.
-Do NOT include any explanations, markdown, or code fences."""
+CRITICAL STRING ESCAPING:
+- Inside @Ignore("...") or any annotation string, escape inner quotes with ONE backslash: \"
+- WRONG: @Ignore("The \\"code\\" param")  → produces literal backslashes
+- CORRECT: @Ignore("The \"code\" param")  → produces correct Java string
+
+CRITICAL: Return ONLY the complete Java class starting with 'package ...'.
+Do NOT include any explanations, markdown, or code fences (no ```)."""
+
 
         kwargs.setdefault("_operation_label", "generate_tests_500")
         return await self.generate_text(
