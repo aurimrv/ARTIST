@@ -30,7 +30,7 @@ class MavenProjectTemplate(LoggerMixin):
         self.logger.info("Initializing Maven project template")
 
         # POM template for Java 8 compatibility
-        # Includes Mockito + Jersey Test Framework for *Test500.java classes
+        # Includes Mockito + Jersey Test Framework for *500Test.java classes
         self.pom_template = Template('''<?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -69,7 +69,7 @@ class MavenProjectTemplate(LoggerMixin):
 
     <dependencies>
 {% if api_impl_jar_name %}
-        <!-- SUT JAR ({{ api_impl_jar_name }}) - required for *Test500.java Mockito/Jersey tests -->
+        <!-- SUT JAR ({{ api_impl_jar_name }}) - required for *500Test.java Mockito/Jersey tests -->
         <!-- Copied from api-impl argument to src/test/resources/{{ api_impl_jar_name }} -->
         <dependency>
             <groupId>com.example</groupId>
@@ -80,7 +80,7 @@ class MavenProjectTemplate(LoggerMixin):
         </dependency>
 {% endif %}
 
-        <!-- Jersey 2.x Test Framework (javax.ws.rs - for *Test500.java) -->
+        <!-- Jersey 2.x Test Framework (javax.ws.rs - for *500Test.java) -->
         <!--
             Jersey pulls junit-platform-* transitively, which causes Surefire 3.x
             to detect JUnit 5 and ignore all @Test annotations from JUnit 4,
@@ -133,7 +133,7 @@ class MavenProjectTemplate(LoggerMixin):
             <scope>test</scope>
         </dependency>
 
-        <!-- Mockito (for *Test500.java MockedStatic) -->
+        <!-- Mockito (for *500Test.java MockedStatic) -->
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>

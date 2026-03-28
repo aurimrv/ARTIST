@@ -9,7 +9,7 @@ This module scans a Java source tree looking for:
   - Application subclasses (extends Application / ResourceConfig) to discover
     resource classes that may not have @Path in the available source files
 
-The extracted information is used to generate accurate Mockito/Jersey Test500 classes
+The extracted information is used to generate accurate Mockito/Jersey 500Test classes
 that reference the real implementation classes from api-impl.jar.
 """
 
@@ -250,7 +250,7 @@ class JavaSourceAnalyzer:
     def format_for_prompt(self) -> str:
         """
         Format the source analysis as a concise text block for LLM prompts.
-        Focuses on information needed to generate correct Test500 classes.
+        Focuses on information needed to generate correct 500Test classes.
         """
         if not self._classes:
             self.analyze()

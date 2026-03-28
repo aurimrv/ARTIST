@@ -426,7 +426,7 @@ class CodeSanitizer(LoggerMixin):
 
     def ensure_test500_imports(self, java_code: str) -> str:
         """
-        Programmatic safety net for *Test500.java files.
+        Programmatic safety net for *500Test.java files.
 
         Ensures that the following imports are always present, regardless of
         what the LLM generated.  If an import is already present it is NOT
@@ -503,6 +503,6 @@ class CodeSanitizer(LoggerMixin):
 
         injected = ', '.join(m.replace('import ', '').rstrip(';') for m in missing)
         self.logger.info(
-            f"[Test500 import guard] Injected {len(missing)} missing import(s): {injected}"
+            f"[500Test import guard] Injected {len(missing)} missing import(s): {injected}"
         )
         return '\n'.join(new_lines)

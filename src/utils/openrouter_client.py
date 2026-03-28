@@ -769,7 +769,8 @@ Return ONLY the Java class code starting with the package declaration."""
         - Overrides configure() to register the real JAX-RS resource class
         - Uses MockedStatic<ServiceClass> to make the service throw RuntimeException
         - Asserts that the response status is exactly 500
-        - Is named with the suffix '500' before '.java' (e.g. V1AlphaTest500)
+        - Is named with the pattern '*500Test.java' (e.g. V1Alpha500Test) so it matches
+          the maven-surefire-plugin include pattern '**/*Test.java'
 
         Args:
             endpoints_500: List of dicts with keys:
@@ -918,8 +919,9 @@ Mockito to simulate HTTP 500 responses for the following endpoints.
 
 Project Context:
 - Package: {project_context.get('package_name', 'com.example.api.tests')}
-- Test Class Name: {project_context.get('class_name', 'ApiTest500')}
-  (this name MUST be used as the public class name — it already has the '500' suffix)
+- Test Class Name: {project_context.get('class_name', 'Api500Test')}
+  (this name MUST be used as the public class name — it follows the pattern *500Test so it
+   matches the maven-surefire-plugin include pattern '**/*Test.java')
 
 {openapi_context}
 {jar_inventory_str}

@@ -508,21 +508,21 @@ class CoordinatorAgent(BaseAgent):
 
             self.logger.info(f"Group {class_name}: DONE")
 
-        # Phase 5: Generate *Test500.java files for endpoints with documented HTTP 500
-        self.log_progress("Phase 5: Generating Mockito/Jersey Test500 classes", 5, 6)
+        # Phase 5: Generate *500Test.java files for endpoints with documented HTTP 500
+        self.log_progress("Phase 5: Generating Mockito/Jersey 500Test classes", 5, 6)
         if generator:
             try:
                 test500_files = await generator.generate_test500_classes(context)
                 if test500_files:
                     self.logger.info(
-                        f"[Phase 5] Generated {len(test500_files)} Test500 class(es): "
+                        f"[Phase 5] Generated {len(test500_files)} 500Test class(es): "
                         + ", ".join(f.name for f in test500_files)
                     )
                     all_generated_files.extend(test500_files)
                 else:
-                    self.logger.info("[Phase 5] No Test500 classes generated (no 500 endpoints found or generation skipped)")
+                    self.logger.info("[Phase 5] No 500Test classes generated (no 500 endpoints found or generation skipped)")
             except Exception as e:
-                self.logger.warning(f"[Phase 5] Test500 generation failed (non-fatal): {e}")
+                self.logger.warning(f"[Phase 5] 500Test generation failed (non-fatal): {e}")
 
         if failed_groups:
             self.logger.warning(
@@ -577,21 +577,21 @@ class CoordinatorAgent(BaseAgent):
                 ignored_tests=[]
             )
         
-        # Step 2b: Generate *Test500.java files for endpoints with documented HTTP 500
+        # Step 2b: Generate *500Test.java files for endpoints with documented HTTP 500
         generator = self._agents.get('generator')
         if generator:
             try:
                 test500_files = await generator.generate_test500_classes(context)
                 if test500_files:
                     self.logger.info(
-                        f"Generated {len(test500_files)} Test500 class(es): "
+                        f"Generated {len(test500_files)} 500Test class(es): "
                         + ", ".join(f.name for f in test500_files)
                     )
                     generated_files.extend(test500_files)
                 else:
-                    self.logger.info("No Test500 classes generated (no 500 endpoints found or generation skipped)")
+                    self.logger.info("No 500Test classes generated (no 500 endpoints found or generation skipped)")
             except Exception as e:
-                self.logger.warning(f"Test500 generation failed (non-fatal): {e}")
+                self.logger.warning(f"500Test generation failed (non-fatal): {e}")
 
         # Step 3: Compilation correction phase
         self.log_progress("Phase 3: Checking and fixing compilation errors", 3, 5)
@@ -682,7 +682,7 @@ class CoordinatorAgent(BaseAgent):
         if not context.api_impl_path:
             self.logger.info(
                 "--api-impl not provided: api-impl JAR will NOT be copied. "
-                "*Test500.java classes will be skipped."
+                "*500Test.java classes will be skipped."
             )
             return
 

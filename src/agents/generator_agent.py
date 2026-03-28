@@ -849,7 +849,7 @@ class GeneratorAgent(BaseAgent):
     ) -> List[Path]:
         """
         Detect all endpoints in the OpenAPI spec that document a 500 response,
-        then generate one *Test500.java file per test-class group using
+        then generate one *500Test.java file per test-class group using
         Mockito + Jersey Test Framework.
 
         The generated files are placed alongside the regular test classes in
@@ -858,7 +858,7 @@ class GeneratorAgent(BaseAgent):
         the suffix '500' inserted before '.java'.
 
         For example, if the regular class is ``V1AlphaTest``, the 500 class
-        will be ``V1AlphaTest500``.
+        will be ``V1Alpha500Test``.
 
         Args:
             context: Project context (must have api_spec_path set)
@@ -867,19 +867,19 @@ class GeneratorAgent(BaseAgent):
             List of generated file paths (may be empty if no 500 endpoints found)
         """
         if not self.openrouter_client:
-            self.logger.warning("OpenRouter client not available — skipping Test500 generation")
+            self.logger.warning("OpenRouter client not available — skipping 500Test generation")
             return []
 
         if not context.api_impl_path:
             self.logger.info(
-                "--api-impl not provided: skipping *Test500.java generation. "
+                "--api-impl not provided: skipping *500Test.java generation. "
                 "Supply --api-impl <path/to/api-impl.jar> to enable Mockito/Jersey 500 tests."
             )
             return []
 
         endpoints_by_class = self._collect_500_endpoints_by_class(context)
         if not endpoints_by_class:
-            self.logger.info("No endpoints with documented HTTP 500 found — skipping Test500 generation")
+            self.logger.info("No endpoints with documented HTTP 500 found — skipping 500Test generation")
             return []
 
         # Inspect the JAR to find real class names and packages
@@ -910,7 +910,7 @@ class GeneratorAgent(BaseAgent):
                 self.log_error("Source code analysis failed — falling back to heuristics", e)
         else:
             self.logger.info(
-                "--api-src not provided: Test500 classes will use heuristic class names. "
+                "--api-src not provided: 500Test classes will use heuristic class names. "
                 "Supply --api-src <path/to/src> for accurate imports."
             )
 
@@ -918,8 +918,9 @@ class GeneratorAgent(BaseAgent):
         openapi_context = self._format_openapi_context_for_llm(context)
 
         for class_name, endpoints in endpoints_by_class.items():
-            class_name_500 = class_name.replace('Test', 'Test500') if 'Test' in class_name else class_name + '500'
-            self.logger.info(f"Generating Test500 class: {class_name_500} ({len(endpoints)} endpoints)")
+            # Name pattern: *500Test.java so it matches **/*Test.java in maven-surefire-plugin
+            class_name_500 = class_name.replace('Test', '500Test') if 'Test' in class_name else class_name + '500Test'
+            self.logger.info(f"Generating 500Test class: {class_name_500} ({len(endpoints)} endpoints)")
 
             project_context_dict = {
                 'package_name': context.package_name,
@@ -957,12 +958,12 @@ class GeneratorAgent(BaseAgent):
                         context.maven_project_dir, context.package_name, class_name_500
                     )
                     generated_files.append(file_path)
-                    self.logger.info(f"Generated Test500 class: {file_path}")
+                    self.logger.info(f"Generated 500Test class: {file_path}")
                 else:
                     self.logger.error(f"LLM generated invalid Java code for {class_name_500}")
 
             except Exception as e:
-                self.log_error(f"Failed to generate Test500 class {class_name_500}", e)
+                self.log_error(f"Failed to generate 500Test class {class_name_500}", e)
 
         return generated_files
 
@@ -1188,7 +1189,7 @@ class GeneratorAgent(BaseAgent):
 
     def _is_valid_java_code_500(self, code: str) -> bool:
         """
-        Validate generated Test500 Java code structure.
+        Validate generated 500Test Java code structure.
         Relaxed variant: does NOT require Rest Assured imports (uses Jersey client instead).
         """
         if not code or not code.strip():
@@ -1197,17 +1198,17 @@ class GeneratorAgent(BaseAgent):
         required_elements = ['package ', 'import ', 'public class ', '@Test']
         for element in required_elements:
             if element not in code:
-                self.logger.warning(f"Test500: Missing required element: {element}")
+                self.logger.warning(f"500Test: Missing required element: {element}")
                 return False
 
         # Must extend JerseyTest
         if 'JerseyTest' not in code:
-            self.logger.warning("Test500: Missing JerseyTest base class")
+            self.logger.warning("500Test: Missing JerseyTest base class")
             return False
 
         # Must have balanced braces
         if code.count('{') != code.count('}'):
-            self.logger.warning("Test500: Unbalanced braces")
+            self.logger.warning("500Test: Unbalanced braces")
             return False
 
         return True
