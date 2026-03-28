@@ -803,52 +803,103 @@ Return ONLY the Java class code starting with the package declaration."""
             Generated Java test class content as a string
         """
         system_message = """You are an expert Java developer specializing in test automation with
-Mockito and Jersey Test Framework 2.x (org.glassfish.jersey).
-Your task is to generate a JUnit 4 test class that uses JerseyTest + MockedStatic to simulate
-HTTP 500 Internal Server Error responses.
+Jersey Test Framework 2.x (org.glassfish.jersey).
+Your task is to generate a JUnit 4 test class that uses JerseyTest with a SUBSTITUTE JAX-RS
+resource to reliably simulate HTTP 500 Internal Server Error responses.
 
-=== MANDATORY IMPORTS (ALL MUST BE PRESENT IN EVERY GENERATED CLASS) ===
-The following imports are MANDATORY and must ALWAYS appear in the generated class:
-  import static org.junit.Assert.*;       <- REQUIRED: provides assertEquals(), assertTrue(), etc.
-  import org.junit.Test;                  <- REQUIRED: provides @Test annotation
+=== WHY NOT MockedStatic ===
+DO NOT use Mockito.mockStatic() to intercept service.getInstance() calls.
+Reason: MockedStatic is thread-local. The Jersey test container (Grizzly) executes HTTP
+requests on a DIFFERENT thread from the test thread. The mock is invisible to Jersey threads,
+so the real service is always called, returning 200 or 404 instead of 500.
+This is a fundamental limitation of Mockito's static mocking mechanism.
+
+=== MANDATORY STRATEGY: SUBSTITUTE RESOURCE ===
+Instead of mocking, register a SUBSTITUTE JAX-RS resource class in configure() that:
+- Has the SAME @Path annotations as the real resource
+- Has the SAME @GET/@POST/@PUT/@DELETE + @Path method signatures
+- Directly throws RuntimeException inside a try/catch that returns HTTP 500
+
+This substitute resource runs in the Jersey thread and always returns 500, regardless of
+any thread-local mocking. No Mockito, no MockedStatic, no service interaction needed.
+
+=== MANDATORY STRUCTURE ===
+
+  public class MyEndpoint500Test extends JerseyTest {
+
+      // Inner static class: substitute resource that always throws 500
+      @Path("/v2/lang")
+      public static class LangResource500 {
+          @GET
+          @Path("{lang}")
+          public Response getByLanguage(
+                  @PathParam("lang") String lang,
+                  @QueryParam("fields") String fields) {
+              try {
+                  throw new RuntimeException("Simulated service error");
+              } catch (Exception e) {
+                  return Response.status(500)
+                          .entity("{\\"status\\":500,\\"message\\":\\"Internal Server Error\\"}") 
+                          .build();
+              }
+          }
+      }
+
+      @Override
+      protected ResourceConfig configure() {
+          enable(TestProperties.LOG_TRAFFIC);
+          enable(TestProperties.DUMP_ENTITY);
+          // Register ONLY the substitute resource(s), NOT the real resource class
+          return new ResourceConfig(LangResource500.class);
+      }
+
+      @Test
+      public void testGetByLanguage_500InternalServerError() {
+          Response response = target("/v2/lang/en").request().get(Response.class);
+          assertEquals(500, response.getStatus());
+      }
+  }
+
+=== MANDATORY RULES ===
+1. The outer class MUST extend org.glassfish.jersey.test.JerseyTest.
+2. Each endpoint that must return 500 gets its own inner static class annotated with @Path.
+   The inner class name should be descriptive, e.g., AlphaResource500, LangResource500.
+3. The inner static class MUST have the EXACT same @Path and HTTP method annotations as
+   the real resource. Use the source code analysis to get the exact @Path values.
+4. Each method in the inner class MUST:
+   a. Have the same parameters (@PathParam, @QueryParam) as the real endpoint.
+   b. Contain: try { throw new RuntimeException("Simulated service error"); }
+               catch (Exception e) { return Response.status(500).entity(...).build(); }
+5. The configure() method MUST register ONLY the inner substitute resource classes.
+   DO NOT register the real resource class (e.g., CountryRestV2.class).
+6. Each @Test method calls the endpoint via target(path).request().get(Response.class)
+   and asserts assertEquals(500, response.getStatus()).
+7. DO NOT import or use Mockito, MockedStatic, or any mocking library.
+8. Use JUnit 4 annotations: @Test from org.junit.Test.
+   NEVER use @org.junit.jupiter.api.Test (that is JUnit 5).
+9. Java 8 compatibility — no var keyword.
+10. The test class name MUST match the class_name in the project context exactly.
+
+=== MANDATORY IMPORTS ===
+  import static org.junit.Assert.*;
+  import org.junit.Test;
   import org.glassfish.jersey.server.ResourceConfig;
   import org.glassfish.jersey.test.JerseyTest;
   import org.glassfish.jersey.test.TestProperties;
-  import org.mockito.MockedStatic;
-  import org.mockito.Mockito;
+  import javax.ws.rs.GET;  (or POST/PUT/DELETE as needed)
+  import javax.ws.rs.Path;
+  import javax.ws.rs.PathParam;  (if path params are used)
+  import javax.ws.rs.QueryParam;  (if query params are used)
   import javax.ws.rs.core.Response;
-NEVER import from `com.sun.jersey.*` — that is Jersey 1.x. ALWAYS use `org.glassfish.jersey.*`.
-The configure() method MUST return a ResourceConfig, NOT a WebAppDescriptor or AppDescriptor.
-WARNING: 'import static org.junit.Assert.*' is CRITICAL. Without it, the compiler will report
-  'cannot find symbol: method assertEquals(int,int)' because assertEquals() is a static method
-  of org.junit.Assert. This import MUST be present even if you think it is not needed.
+NEVER import from `com.sun.jersey.*` — that is Jersey 1.x.
+DO NOT import Mockito, MockedStatic, or any mocking library.
 
-=== MANDATORY RULES ===
-1. The class MUST extend org.glassfish.jersey.test.JerseyTest.
-2. Override configure() to return new ResourceConfig(ResourceClass.class).
-   The return type MUST be ResourceConfig (NOT Application or AppDescriptor).
-3. Use `target(path).request().get(Response.class)` to call endpoints. NEVER use `resource().path(...)`, which is a Jersey 1.x API.
-4. Each @Test method MUST use MockedStatic to make the service's `getInstance()` method throw the exception directly: `mockedStatic.when(ServiceClass::getInstance).thenThrow(new RuntimeException("Simulated error"));`. DO NOT create a separate mock instance of the service class (`Mockito.mock(Service.class)` is unnecessary and wrong).
-5. Each @Test method MUST assert assertEquals(500, response.getStatus()) — exactly 500.
-6. anyOf() is STRICTLY PROHIBITED. Never use anyOf() for status code assertions.
-7. Use JUnit 4 annotations: @Test from org.junit.Test, @Before, @After.
-   NEVER use @org.junit.jupiter.api.Test (that is JUnit 5).
-8. Java 8 compatibility — no var keyword, no complex lambda expressions.
-9. The test class name MUST match the class_name in the project context exactly.
-10. Import org.mockito.MockedStatic and org.mockito.Mockito.
-
-=== IMPORT CONFLICT RESOLUTION (CRITICAL) ===
-When two classes share the same simple name (e.g., CountryService exists in both v1 and v2):
-  - DO NOT import both. DO NOT use 'import X as Y' (Java does not support import aliases).
-  - Instead: import ONLY the one needed for this specific test class.
-  - For any other class with the same simple name, use its FULLY QUALIFIED NAME (FQN) inline
-    in the code (e.g., eu.fayder.restcountries.v2.rest.CountryService.getInstance()).
-  - This is the ONLY valid Java approach for name disambiguation.
-
-=== USING ONLY REAL CLASSES ===
-You MUST use ONLY the classes listed in the source code analysis or JAR inventory below.
-DO NOT invent class names like 'V1AlphacodesResource', 'V1LangResource', etc.
-If a resource class is not listed, use the closest real JAX-RS resource class available.
+=== USING ONLY REAL PATH ANNOTATIONS ===
+You MUST use the EXACT @Path values from the real resource class.
+DO NOT invent path values. Use the source code analysis or OpenAPI spec to get exact paths.
+Example: if the real resource has @Path("v2") on the class and @Path("lang/{lang}") on the
+method, the substitute inner class must have @Path("v2/lang") and the method @Path("{lang}").
+OR combine them: @Path("v2/lang/{lang}") on the method with no class-level @Path.
 
 === STRING ESCAPING IN ANNOTATIONS ===
 When writing string literals inside Java annotations (e.g., @Ignore("...")), use a SINGLE
@@ -931,8 +982,8 @@ Do NOT invent class names. Do NOT use placeholder names like 'V1AlphacodesResour
                     + "\n=== END AMBIGUOUS CLASSES ===\n"
                 )
 
-        prompt = f"""Generate a JUnit 4 test class using Jersey 2.x (org.glassfish.jersey) and
-Mockito to simulate HTTP 500 responses for the following endpoints.
+        prompt = f"""Generate a JUnit 4 test class using Jersey 2.x (org.glassfish.jersey) to
+simulate HTTP 500 Internal Server Error responses for the following endpoints.
 
 Project Context:
 - Package: {project_context.get('package_name', 'com.example.api.tests')}
@@ -943,33 +994,34 @@ Project Context:
 {openapi_context}
 {jar_inventory_str}
 {src_analysis_section}
-{conflict_warning}
-{endpoints_enriched_note}
 Endpoints that document HTTP 500 in the spec:
 {endpoints_str}
 
-For each endpoint above, generate one @Test method that:
-1. Opens a `MockedStatic<ServiceClass>` block.
-2. Configures the static `getInstance()` method of the service to throw an exception directly: `mockedStatic.when(ServiceClass::getInstance).thenThrow(new RuntimeException("Simulated error"));`.
-3. Does NOT create a separate mock object of the service class.
-4. Calls the endpoint via target(path).request().get(Response.class) (Jersey 2.x API).
-   Use target("/v1/alpha").queryParam("codes", "US").request().get(Response.class).
-   NEVER use resource().path(...) — that is Jersey 1.x API and does not exist in Jersey 2.x.
-5. Asserts assertEquals(500, response.getStatus()).
+Generate the class following the MANDATORY STRATEGY from the system message:
 
-The configure() method must:
-- Return a ResourceConfig (NOT Application, NOT AppDescriptor).
-- Register ALL resource classes needed by the endpoints above.
-- Use: return new ResourceConfig(RealResourceClass.class);
+1. For each endpoint above, create ONE inner static class (annotated with @Path) that acts
+   as a substitute resource. The inner class:
+   a. Has the EXACT same @Path values as the real endpoint (use the OpenAPI spec paths above).
+   b. Has the EXACT same HTTP method annotation (@GET, @POST, etc.).
+   c. Has the same @PathParam and @QueryParam parameters as the real endpoint.
+   d. Contains: try {{ throw new RuntimeException("Simulated service error"); }}
+                catch (Exception e) {{ return Response.status(500).entity(
+                    "{{\\"status\\":500,\\"message\\":\\"Internal Server Error\\"}}").build(); }}
 
-CRITICAL IMPORT RULES:
-- Use ONLY classes listed in the source code analysis or JAR inventory above.
-- DO NOT invent class names (no 'V1AlphacodesResource', no 'V1LangResource', etc.).
-- DO NOT use 'import X as Y' — Java has no import alias syntax.
-- When a class name is ambiguous (same simple name in multiple packages), import ONLY ONE
-  and use the FULLY QUALIFIED NAME (FQN) for the other one directly in the code body.
-- The service class is a singleton: use ServiceClass.getInstance() pattern.
-- The resource class is the JAX-RS @Path annotated class: register it in ResourceConfig.
+2. The configure() method registers ONLY the inner substitute resource classes:
+   return new ResourceConfig(InnerClass1.class, InnerClass2.class, ...);
+   DO NOT register any real resource class from the API implementation.
+
+3. For each endpoint, generate one @Test method:
+   - Calls the endpoint via target(path).request().get(Response.class) (Jersey 2.x).
+   - Asserts assertEquals(500, response.getStatus()).
+   - NEVER uses resource().path(...) — that is Jersey 1.x.
+
+4. PATH CONSTRUCTION: Build the target path from the OpenAPI spec path.
+   Example: for endpoint path "/v2/lang/{{lang}}", use target("/v2/lang/en").
+   For path "/v2/alpha" with query param "codes", use target("/v2/alpha").queryParam("codes", "US;CA").
+
+5. DO NOT use Mockito, MockedStatic, or any mocking library.
 
 CRITICAL STRING ESCAPING:
 - Inside @Ignore("...") or any annotation string, escape inner quotes with ONE backslash: \"

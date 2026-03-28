@@ -440,8 +440,11 @@ class CodeSanitizer(LoggerMixin):
           - import org.glassfish.jersey.server.ResourceConfig;
           - import org.glassfish.jersey.test.JerseyTest;
           - import javax.ws.rs.core.Response;
-          - import org.mockito.MockedStatic;
-          - import org.mockito.Mockito;
+
+        NOTE: Mockito and MockedStatic are intentionally NOT required for 500 tests.
+        The 500 test strategy uses substitute JAX-RS resources (inner static classes)
+        instead of MockedStatic, because MockedStatic is thread-local and does not
+        work across Jersey's Grizzly container threads.
 
         Args:
             java_code: Java source code string (already sanitized).
@@ -455,8 +458,6 @@ class CodeSanitizer(LoggerMixin):
             "import org.glassfish.jersey.server.ResourceConfig;",
             "import org.glassfish.jersey.test.JerseyTest;",
             "import javax.ws.rs.core.Response;",
-            "import org.mockito.MockedStatic;",
-            "import org.mockito.Mockito;",
         ]
 
         lines = java_code.split('\n')
