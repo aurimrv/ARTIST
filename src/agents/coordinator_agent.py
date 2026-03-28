@@ -309,6 +309,17 @@ class CoordinatorAgent(BaseAgent):
                 ignored_tests=[]
             )
         
+        # Filter out 5xx scenarios from regular test generation — they are handled
+        # exclusively by the *500Test.java classes generated via Jersey+Mockito.
+        scenarios_no_5xx = [s for s in scenarios if not (500 <= s.expected_status < 600)]
+        removed_5xx = len(scenarios) - len(scenarios_no_5xx)
+        if removed_5xx > 0:
+            self.logger.info(
+                f"Filtered out {removed_5xx} 5xx scenario(s) from regular test generation "
+                f"(they will be covered by *500Test.java classes)."
+            )
+        scenarios = scenarios_no_5xx
+
         if context.split_by_endpoint:
             return await self._execute_split_by_endpoint(context, scenarios, skip_compilation, skip_test_run)
         else:

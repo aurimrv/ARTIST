@@ -918,7 +918,8 @@ Your task is to:
 5. Set expected_status accurately using the declared response codes:
    - 2xx for positive/success scenarios  (200 OK, 201 Created, 204 No Content …)
    - 4xx for negative/client-error scenarios (400 Bad Request, 401 Unauthorized, 403 Forbidden, 404 Not Found …)
-   - Only include 5xx scenarios when explicitly declared in the spec
+   - Do NOT include 5xx scenarios (500, 502, 503, etc.) — HTTP 500 tests require a
+     dedicated Jersey+Mockito class (*500Test.java) generated separately. Omit all 5xx scenarios.
 6. Add dependency information between scenarios
 7. Improve scenario descriptions
 8. IMPORTANT: When the spec provides "parameter_examples" for an endpoint, you MUST use
@@ -934,6 +935,7 @@ Rules:
 - Endpoints must start with valid paths (never with bare path parameters like /{{param}})
 - Use consistent parameter values across related scenarios
 - Do NOT invent status codes not present in the spec responses
+- Do NOT generate scenarios with expected_status 500 or any other 5xx code
 - The output enhanced_scenarios array MUST contain AT LEAST {scenario_count} entries
 - You MUST include an improved version of every input scenario
 - You MAY add new scenarios beyond the {scenario_count} minimum

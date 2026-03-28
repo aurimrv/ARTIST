@@ -559,9 +559,13 @@ expected HTTP status codes. You MUST generate @Test methods for EVERY response s
 documented in the spec for each endpoint, including:
 - 2xx success codes (200, 201, 204, etc.)
 - 4xx client error codes (400, 401, 403, 404, 405, 409, 422, etc.)
-- 5xx server error codes (500, 502, 503, etc.) when documented in the spec
-Do NOT skip any documented status code. Each documented status code for each endpoint
-MUST have at least one dedicated @Test method.
+Do NOT skip any documented status code EXCEPT 5xx codes. Each documented status code for
+each endpoint MUST have at least one dedicated @Test method.
+
+EXCLUSION RULE — 5xx CODES: Do NOT generate @Test methods for any 5xx status code
+(500, 502, 503, etc.) in this regular test class. HTTP 500 scenarios require a dedicated
+Jersey+Mockito test class (*500Test.java) that can simulate service-layer exceptions.
+Skip all 5xx scenarios silently — do NOT add @Ignore for them either.
 
 STATUS CODE IMMUTABILITY RULE: Status codes in @Test assertions are derived from the
 OpenAPI specification and are IMMUTABLE. Use ONLY the exact integer value documented
@@ -597,7 +601,7 @@ CRITICAL REQUIREMENTS:
 16. ALL @Test methods MUST explicitly declare a timeout of 60000 milliseconds using @Test(timeout = 60000)
 17. MANDATORY COVERAGE: Generate ONE @Test method per scenario. NEVER merge two scenarios into one @Test method. Each scenario in the list MUST map to exactly one (or more) @Test method(s).
 18. EXPAND COVERAGE: After implementing the mandatory @Test methods, add ADDITIONAL @Test methods for boundary values (e.g., zero, negative, maximum, empty string, null) and parameter combinations not listed in the scenarios.
-19. FULL RETCODE COVERAGE: For each endpoint in the spec, you MUST generate @Test methods for ALL documented response status codes. Do NOT skip 4xx or 5xx codes. If the spec documents a 500 response for an endpoint, generate a test that expects exactly 500 (using a request that triggers the error condition if possible, or mark it @Ignore with a clear reason if it cannot be triggered via REST Assured alone).
+19. FULL RETCODE COVERAGE: For each endpoint in the spec, you MUST generate @Test methods for ALL documented response status codes EXCEPT 5xx codes. Do NOT skip any 2xx or 4xx code. NEVER generate a @Test method that asserts .statusCode(500) or any other 5xx code in this class — those belong exclusively in the *500Test.java class generated separately.
 20. STATUS CODE IMMUTABILITY: Each .statusCode(N) assertion MUST use the exact integer N from the OpenAPI spec. anyOf() is STRICTLY PROHIBITED for status code assertions. Do NOT use anyOf(is(200), is(201)) or any similar construct. Do NOT change a status code even within the same HTTP category (e.g. 400 vs 404, 200 vs 201).
 
 SETUP AND CLEANUP METHOD REQUIREMENTS:
@@ -700,6 +704,11 @@ STRICT SCOPE RULE: Generate ONLY the @Test methods listed in the scenarios below
 Do NOT add extra boundary-value tests or edge-case tests beyond what is specified.
 Keep the class small and complete — truncated output is invalid.
 
+EXCLUSION RULE — 5xx CODES: Do NOT generate @Test methods for any scenario whose
+expected_status is a 5xx code (500, 502, 503, etc.). HTTP 500 scenarios require a
+dedicated Jersey+Mockito test class (*500Test.java). Skip 5xx scenarios silently —
+do NOT add @Ignore for them either.
+
 STATUS CODE IMMUTABILITY RULE: Status codes in @Test assertions are derived from the
 OpenAPI specification and are IMMUTABLE.
 - Use ONLY the exact integer value documented in the spec for each scenario.
@@ -728,6 +737,8 @@ REQUIREMENTS:
 10. Generate EXACTLY the scenarios listed — one @Test per scenario, no more
 11. STATUS CODE IMMUTABILITY: Each .statusCode(N) assertion uses the EXACT integer N from the
     scenario's expected_status field. anyOf() is FORBIDDEN. Do NOT change any status code value.
+12. SKIP 5xx SCENARIOS: If any scenario has expected_status 500 or any other 5xx code, skip it
+    entirely. Do NOT generate a @Test for it. Do NOT add @Ignore. Just omit it.
 
 IMPORTS REQUIRED:
 - import static io.restassured.RestAssured.*;
@@ -806,7 +817,7 @@ The following imports are MANDATORY and must ALWAYS appear in the generated clas
   import org.mockito.MockedStatic;
   import org.mockito.Mockito;
   import javax.ws.rs.core.Response;
-NEVER import from com.sun.jersey.* — that is Jersey 1.x and will cause compilation errors.
+NEVER import from `com.sun.jersey.*` — that is Jersey 1.x. ALWAYS use `org.glassfish.jersey.*`.
 The configure() method MUST return a ResourceConfig, NOT a WebAppDescriptor or AppDescriptor.
 WARNING: 'import static org.junit.Assert.*' is CRITICAL. Without it, the compiler will report
   'cannot find symbol: method assertEquals(int,int)' because assertEquals() is a static method
@@ -816,8 +827,8 @@ WARNING: 'import static org.junit.Assert.*' is CRITICAL. Without it, the compile
 1. The class MUST extend org.glassfish.jersey.test.JerseyTest.
 2. Override configure() to return new ResourceConfig(ResourceClass.class).
    The return type MUST be ResourceConfig (NOT Application or AppDescriptor).
-3. Use target(path).request().get(Response.class) to call endpoints — NOT resource().path(...).
-4. Each @Test method MUST use MockedStatic to make the service class throw RuntimeException.
+3. Use `target(path).request().get(Response.class)` to call endpoints. NEVER use `resource().path(...)`, which is a Jersey 1.x API.
+4. Each @Test method MUST use MockedStatic to make the service's `getInstance()` method throw the exception directly: `mockedStatic.when(ServiceClass::getInstance).thenThrow(new RuntimeException("Simulated error"));`. DO NOT create a separate mock instance of the service class (`Mockito.mock(Service.class)` is unnecessary and wrong).
 5. Each @Test method MUST assert assertEquals(500, response.getStatus()) — exactly 500.
 6. anyOf() is STRICTLY PROHIBITED. Never use anyOf() for status code assertions.
 7. Use JUnit 4 annotations: @Test from org.junit.Test, @Before, @After.
@@ -938,9 +949,9 @@ Endpoints that document HTTP 500 in the spec:
 {endpoints_str}
 
 For each endpoint above, generate one @Test method that:
-1. Opens a MockedStatic<ServiceClass> block.
-2. Creates a mock of ServiceClass and makes getInstance() return it.
-3. Configures the relevant service method to throw new RuntimeException("Simulated error").
+1. Opens a `MockedStatic<ServiceClass>` block.
+2. Configures the static `getInstance()` method of the service to throw an exception directly: `mockedStatic.when(ServiceClass::getInstance).thenThrow(new RuntimeException("Simulated error"));`.
+3. Does NOT create a separate mock object of the service class.
 4. Calls the endpoint via target(path).request().get(Response.class) (Jersey 2.x API).
    Use target("/v1/alpha").queryParam("codes", "US").request().get(Response.class).
    NEVER use resource().path(...) — that is Jersey 1.x API and does not exist in Jersey 2.x.
