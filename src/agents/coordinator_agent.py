@@ -429,10 +429,12 @@ class CoordinatorAgent(BaseAgent):
             else:
                 for compile_attempt in range(1, max_compile_attempts + 1):
                     self.logger.info(f"[Phase 3] Compiling: {class_name} (attempt {compile_attempt}/{max_compile_attempts})")
+                    scenarios_as_str = "\n".join([str(s) for s in group_scenarios])
                     if compiler:
                         compile_result = await compiler.process({
                             'project_dir': str(context.maven_project_dir),
-                            'generated_files': [str(generated_file)]
+                            'generated_files': [str(generated_file)],
+                            'scenarios': scenarios_as_str
                         })
                         # Strip any @Ignore inserted by compiler corrector
                         self._remove_ignore_from_file(generated_file)
@@ -482,6 +484,7 @@ class CoordinatorAgent(BaseAgent):
                     test_result = await test_corrector.process({
                         'project_dir': str(context.maven_project_dir),
                         'generated_files': [str(generated_file)],
+                        'scenarios': scenarios_as_str,
                         'test_class': class_name  # hint for isolated execution
                     })
                     failures = test_result.get('failures', [])

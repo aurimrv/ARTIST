@@ -114,8 +114,9 @@ class TestCorrectorAgent(BaseAgent):
             
             # Step 3: Fix test failures iteratively
             self.log_progress("Fixing test failures", 3, 4)
+            scenarios = input_data['scenarios']
             correction_result = await self._fix_test_failures(
-                project_dir, generated_files, failures, test_class=test_class_hint
+                project_dir, generated_files, failures, scenarios, test_class=test_class_hint
             )
             
             # Step 4: Final test run verification
@@ -154,8 +155,7 @@ class TestCorrectorAgent(BaseAgent):
         """
         errors = super().validate_input(input_data)
         
-        required_fields = ['project_dir', 'generated_files']
-        
+        required_fields = ['project_dir', 'generated_files', 'scenarios']      
         for field in required_fields:
             if field not in input_data:
                 errors.append(f"Missing required field: {field}")
@@ -555,6 +555,7 @@ class TestCorrectorAgent(BaseAgent):
         project_dir: Path,
         generated_files: List[Path],
         failures: List[TestFailure],
+        scenarios: str,
         test_class: Optional[str] = None
     ) -> Dict[str, Any]:
         """
@@ -589,7 +590,7 @@ class TestCorrectorAgent(BaseAgent):
                 
                 # Attempt to fix failures in this file
                 correction_result = await self._fix_file_test_failures(
-                    file_path, file_failures
+                    file_path, file_failures, scenarios
                 )
                 
                 if correction_result['corrected']:
@@ -672,7 +673,8 @@ class TestCorrectorAgent(BaseAgent):
     async def _fix_file_test_failures(
         self,
         file_path: Path,
-        failures: List[TestFailure]
+        failures: List[TestFailure],
+        scenarios: str
     ) -> Dict[str, Any]:
         """
         Fix test failures in a single file.
@@ -704,7 +706,7 @@ class TestCorrectorAgent(BaseAgent):
             # Strategy 1: LLM-based correction (if available)
             if self.openrouter_client:
                 correction_result = await self._fix_with_llm(
-                    original_content, failures, file_path
+                    original_content, failures, file_path, scenarios
                 )
                 corrected_content = correction_result.get('content')
                 ignored_methods.extend(correction_result.get('ignored', []))
@@ -744,7 +746,8 @@ class TestCorrectorAgent(BaseAgent):
         self,
         content: str,
         failures: List[TestFailure],
-        file_path: Path
+        file_path: Path,
+        scenarios: str
     ) -> Dict[str, Any]:
         """
         Fix test failures using LLM.
@@ -774,6 +777,7 @@ class TestCorrectorAgent(BaseAgent):
             corrected_content = await self.openrouter_client.fix_test_failures(
                 code=content,
                 failures=failures_text,
+                scenarios=scenarios,
                 model=self.get_model_name(),
                 max_tokens=self.get_max_tokens(),
                 temperature=self.get_temperature()
@@ -788,8 +792,20 @@ class TestCorrectorAgent(BaseAgent):
             
             # Validate the corrected content
             if corrected_content and self._is_valid_java_code(corrected_content):
+                # Enforce status-code immutability: revert any method where the
+                # LLM changed a .statusCode(N) value and add @Ignore with reason.
+                corrected_content, sc_violations = (
+                    self.code_sanitizer.enforce_status_code_immutability(
+                        content, corrected_content
+                    )
+                )
+                if sc_violations:
+                    self.logger.warning(
+                        f"[status-code guard] {len(sc_violations)} violation(s) reverted "
+                        f"in {file_path}: {sc_violations}"
+                    )
                 self.logger.info(f"LLM test correction successful for {file_path}")
-                return {'content': corrected_content, 'ignored': []}
+                return {'content': corrected_content, 'ignored': sc_violations}
             else:
                 self.logger.warning(f"LLM test correction failed validation for {file_path}")
                 return {'content': None, 'ignored': []}

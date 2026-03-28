@@ -99,8 +99,9 @@ class CompilerCorrectorAgent(BaseAgent):
             
             # Step 3: Fix compilation errors iteratively
             self.log_progress("Fixing compilation errors", 3, 4)
+            scenarios = input_data['scenarios']
             correction_result = await self._fix_compilation_errors(
-                project_dir, generated_files, errors
+                project_dir, generated_files, errors, scenarios
             )
             
             # Step 4: Final compilation verification
@@ -140,8 +141,7 @@ class CompilerCorrectorAgent(BaseAgent):
         """
         errors = super().validate_input(input_data)
         
-        required_fields = ['project_dir', 'generated_files']
-        
+        required_fields = ['project_dir', 'generated_files', 'scenarios']     
         for field in required_fields:
             if field not in input_data:
                 errors.append(f"Missing required field: {field}")
@@ -220,7 +220,8 @@ class CompilerCorrectorAgent(BaseAgent):
         self,
         project_dir: Path,
         generated_files: List[Path],
-        errors: List[CompilationError]
+        errors: List[CompilationError],
+        scenarios: str
     ) -> Dict[str, Any]:
         """
         Fix compilation errors iteratively.
@@ -251,7 +252,7 @@ class CompilerCorrectorAgent(BaseAgent):
                 
                 # Attempt to fix errors in this file
                 correction_successful = await self._fix_file_errors(
-                    Path(file_path), file_errors
+                    Path(file_path), file_errors, scenarios
                 )
                 
                 if correction_successful:
@@ -301,7 +302,8 @@ class CompilerCorrectorAgent(BaseAgent):
     async def _fix_file_errors(
         self,
         file_path: Path,
-        errors: List[CompilationError]
+        errors: List[CompilationError],
+        scenarios: str
     ) -> bool:
         """
         Fix compilation errors in a single file.
@@ -327,7 +329,7 @@ class CompilerCorrectorAgent(BaseAgent):
             # Strategy 1: LLM-based correction (if available)
             if self.openrouter_client:
                 corrected_content = await self._fix_with_llm(
-                    original_content, errors, file_path
+                    original_content, errors, file_path, scenarios
                 )
             
             # Strategy 2: Rule-based correction (fallback)
@@ -359,7 +361,8 @@ class CompilerCorrectorAgent(BaseAgent):
         self,
         content: str,
         errors: List[CompilationError],
-        file_path: Path
+        file_path: Path,
+        scenarios: str
     ) -> Optional[str]:
         """
         Fix compilation errors using LLM.
@@ -384,8 +387,9 @@ class CompilerCorrectorAgent(BaseAgent):
             
             # Generate corrected code using LLM
             corrected_content = await self.openrouter_client.fix_compilation_errors(
-                code=content,
+                code=original_content,
                 errors=errors_text,
+                scenarios=scenarios,
                 model=self.get_model_name(),
                 max_tokens=self.get_max_tokens(),
                 temperature=self.get_temperature()
@@ -400,6 +404,18 @@ class CompilerCorrectorAgent(BaseAgent):
             
             # Validate the corrected content
             if corrected_content and self._is_valid_java_code(corrected_content):
+                # Enforce status-code immutability: revert any method where the
+                # LLM changed a .statusCode(N) value and add @Ignore with reason.
+                corrected_content, sc_violations = (
+                    self.code_sanitizer.enforce_status_code_immutability(
+                        original_content, corrected_content
+                    )
+                )
+                if sc_violations:
+                    self.logger.warning(
+                        f"[status-code guard] {len(sc_violations)} violation(s) reverted "
+                        f"in {file_path}: {sc_violations}"
+                    )
                 self.logger.info(f"LLM correction successful for {file_path}")
                 return corrected_content
             else:

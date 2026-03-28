@@ -506,3 +506,236 @@ class CodeSanitizer(LoggerMixin):
             f"[500Test import guard] Injected {len(missing)} missing import(s): {injected}"
         )
         return '\n'.join(new_lines)
+    # ------------------------------------------------------------------
+    # Status-code immutability guard
+    # ------------------------------------------------------------------
+
+    def extract_status_codes_per_method(self, java_code: str) -> dict:
+        """
+        Extract the set of .statusCode(N) values for every @Test method in
+        the given Java source code.
+
+        The extraction is done with a simple line-by-line scan that is
+        intentionally independent of any specific API implementation.  It
+        works for any JUnit 4 / Rest Assured test class.
+
+        Returns:
+            A dict mapping method_name -> set of integer status codes found
+            inside that method's body.
+
+        Example::
+
+            {
+                "test_get_v2_alpha_codes_not_found": {404},
+                "test_get_v2_alpha_codes_server_error": {500},
+            }
+        """
+        result: dict = {}
+        current_method: str | None = None
+        brace_depth: int = 0
+        method_brace_start: int = 0
+
+        # Patterns (no API-specific knowledge required)
+        method_decl_re = re.compile(
+            r'public\s+void\s+(\w+)\s*\('
+        )
+        status_code_re = re.compile(
+            r'\.statusCode\s*\(\s*(\d+)\s*\)'
+        )
+
+        for line in java_code.split('\n'):
+            # Track brace depth to know when a method body ends
+            brace_depth += line.count('{') - line.count('}')
+
+            # Detect start of a new public void method
+            m = method_decl_re.search(line)
+            if m:
+                current_method = m.group(1)
+                result.setdefault(current_method, set())
+                method_brace_start = brace_depth
+                continue
+
+            if current_method is not None:
+                # Collect status codes inside this method
+                for sc_match in status_code_re.finditer(line):
+                    result[current_method].add(int(sc_match.group(1)))
+
+                # Method body closed when brace depth returns to where it was
+                # before the opening brace of the method
+                if brace_depth < method_brace_start:
+                    current_method = None
+
+        return result
+
+    def enforce_status_code_immutability(
+        self,
+        original_code: str,
+        corrected_code: str,
+        add_ignore_on_violation: bool = True,
+    ) -> tuple:
+        """
+        Compare the status codes in *original_code* with those in
+        *corrected_code*.  If the LLM changed any `.statusCode(N)` value for
+        any @Test method, the violation is handled as follows:
+
+        * If *add_ignore_on_violation* is True (default): the offending test
+          method in *corrected_code* is reverted to the original method body
+          (i.e., the original method replaces the corrected one) and an
+          ``@Ignore`` annotation is added with a descriptive reason.
+        * The method returns the (possibly patched) code and a list of
+          violation descriptions.
+
+        This guard is entirely generic — it does not know anything about the
+        API under test.  It simply compares integer literals inside
+        ``.statusCode(...)`` calls before and after LLM correction.
+
+        Args:
+            original_code:          Java source before LLM correction.
+            corrected_code:         Java source after LLM correction.
+            add_ignore_on_violation: Whether to patch violations automatically.
+
+        Returns:
+            (patched_code: str, violations: list[str])
+        """
+        orig_map = self.extract_status_codes_per_method(original_code)
+        corr_map = self.extract_status_codes_per_method(corrected_code)
+
+        violations: list = []
+        patched_code = corrected_code
+
+        for method_name, orig_codes in orig_map.items():
+            if not orig_codes:
+                continue  # method has no statusCode assertion — nothing to guard
+
+            corr_codes = corr_map.get(method_name, set())
+
+            if orig_codes != corr_codes:
+                violation_msg = (
+                    f"Status code changed in '{method_name}': "
+                    f"original={sorted(orig_codes)} → corrected={sorted(corr_codes)}"
+                )
+                violations.append(violation_msg)
+                self.logger.warning(
+                    f"[status-code guard] {violation_msg}"
+                )
+
+                if add_ignore_on_violation:
+                    # Revert the method body to the original and add @Ignore
+                    patched_code = self._revert_method_to_original(
+                        patched_code,
+                        original_code,
+                        method_name,
+                        reason=(
+                            f"LLM changed statusCode from {sorted(orig_codes)} "
+                            f"to {sorted(corr_codes)} — spec value preserved, "
+                            f"test needs manual review"
+                        ),
+                    )
+
+        return patched_code, violations
+
+    # ------------------------------------------------------------------
+    # Internal helpers for status-code guard
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_method_block(java_code: str, method_name: str) -> str | None:
+        """
+        Return the full text of the named public void method (including its
+        @Test / @Ignore annotations and closing brace) from *java_code*, or
+        None if the method is not found.
+        """
+        lines = java_code.split('\n')
+        method_decl_re = re.compile(
+            rf'public\s+void\s+{re.escape(method_name)}\s*\('
+        )
+
+        # Walk backward from the method declaration to collect leading
+        # annotations (@Test, @Ignore, @Before, …)
+        decl_idx = None
+        for i, line in enumerate(lines):
+            if method_decl_re.search(line):
+                decl_idx = i
+                break
+
+        if decl_idx is None:
+            return None
+
+        # Collect annotations that immediately precede the declaration
+        start_idx = decl_idx
+        for i in range(decl_idx - 1, -1, -1):
+            stripped = lines[i].strip()
+            if stripped.startswith('@') or stripped == '':
+                start_idx = i
+            else:
+                break
+
+        # Collect lines until the method body closes
+        brace_depth = 0
+        end_idx = decl_idx
+        body_started = False
+        for i in range(decl_idx, len(lines)):
+            brace_depth += lines[i].count('{') - lines[i].count('}')
+            if brace_depth > 0:
+                body_started = True
+            if body_started and brace_depth <= 0:
+                end_idx = i
+                break
+
+        return '\n'.join(lines[start_idx:end_idx + 1])
+
+    def _revert_method_to_original(
+        self,
+        corrected_code: str,
+        original_code: str,
+        method_name: str,
+        reason: str,
+    ) -> str:
+        """
+        Replace the method *method_name* in *corrected_code* with the version
+        from *original_code*, and prepend an ``@Ignore`` annotation to it.
+
+        If the method cannot be located in either source, *corrected_code* is
+        returned unchanged (fail-safe).
+        """
+        orig_block = self._extract_method_block(original_code, method_name)
+        corr_block = self._extract_method_block(corrected_code, method_name)
+
+        if orig_block is None or corr_block is None:
+            self.logger.warning(
+                f"[status-code guard] Could not locate '{method_name}' for revert"
+            )
+            return corrected_code
+
+        # Escape the reason for use inside a Java string literal
+        safe_reason = reason.replace('"', '\\"').replace('\n', ' ')
+
+        # Add @Ignore before the first @Test annotation in the original block
+        ignore_annotation = f'@Ignore("{safe_reason}")'
+        if '@Ignore' not in orig_block:
+            orig_block_annotated = re.sub(
+                r'(@Test(?:\s*\([^)]*\))?)',
+                f'{ignore_annotation}\n    \\1',
+                orig_block,
+                count=1,
+            )
+        else:
+            orig_block_annotated = orig_block  # already ignored
+
+        # Ensure @Ignore import is present
+        if 'import org.junit.Ignore;' not in corrected_code:
+            corrected_code = re.sub(
+                r'(import org\.junit\.Test;)',
+                r'\1\nimport org.junit.Ignore;',
+                corrected_code,
+                count=1,
+            )
+
+        # Replace the corrected block with the reverted+annotated original
+        patched = corrected_code.replace(corr_block, orig_block_annotated, 1)
+        if patched == corrected_code:
+            self.logger.warning(
+                f"[status-code guard] Could not replace block for '{method_name}' "
+                f"(block not found verbatim in corrected code)"
+            )
+        return patched

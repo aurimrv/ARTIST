@@ -332,6 +332,7 @@ Format the output as a structured JSON with the following schema:
         self,
         code: str,
         errors: str,
+        scenarios: str,
         model: str,
         **kwargs
     ) -> str:
@@ -402,7 +403,10 @@ WHAT NOT TO CHANGE:
   category (e.g. 400 → 404 is forbidden). The only allowed fix involving a status code
   line is correcting a pure SYNTAX error while keeping the integer value identical.
 
-CRITICAL: Return ONLY the corrected Java code that resolves all compilation errors. Do NOT include any explanations, descriptions, or markdown code blocks. Maintain the original functionality and test logic while fixing ONLY syntax and import issues."""
+SOURCE OF TRUTH (Scenarios):
+{scenarios}
+
+CRITICAL: Return ONLY the corrected Java code that resolves all compilation errors. You MUST ensure that the status code in each test method in your response matches the expected_status from the 'SOURCE OF TRUTH' scenarios provided above. This is the most important rule. Do NOT include any explanations, descriptions, or markdown code blocks. Maintain the original functionality and test logic while fixing ONLY syntax and import issues."""
         
         kwargs.setdefault("_operation_label", "fix_compilation")
         return await self.generate_text(
@@ -416,6 +420,7 @@ CRITICAL: Return ONLY the corrected Java code that resolves all compilation erro
         self,
         code: str,
         failures: str,
+        scenarios: str,
         model: str,
         scenario_count: int = 0,
         **kwargs
@@ -493,6 +498,7 @@ CRITICAL: Return ONLY the corrected Java code that resolves all compilation erro
             f"Fix the test failures in the following Java test code. Analyze the failure patterns\n"
             f"and adapt the test LOGIC (request construction, test data, body assertions) to match\n"
             f"the actual API behavior. NEVER change HTTP status code assertions.\n\n"
+            f"SOURCE OF TRUTH (Scenarios):\n{scenarios}\n\n"
             f"Java Test Code:\n```java\n{code}\n```\n\n"
             f"Test Failures:\n{failures}\n"
             f"{min_tests_clause}\n"
@@ -502,7 +508,7 @@ CRITICAL: Return ONLY the corrected Java code that resolves all compilation erro
             "use @Ignore instead and keep the original assertion intact.\n\n"
             "Apply consistent fixes across similar failures and ensure the corrected tests will "
             "pass reliably against the actual API implementation.\n\n"
-            "CRITICAL: Return ONLY the corrected Java test code that resolves the test failures. "
+            "CRITICAL: Return ONLY the corrected Java test code that resolves the test failures. You MUST ensure that the status code in each test method in your response matches the expected_status from the 'SOURCE OF TRUTH' scenarios provided above. This is the most important rule. "
             "Do NOT include any explanations, descriptions, or markdown code blocks. "
             "If a test cannot be fixed reliably without changing a status code, add @Ignore "
             "annotation with a clear reason but KEEP THE METHOD and its original assertions in the class."
