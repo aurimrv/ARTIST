@@ -789,13 +789,21 @@ Mockito and Jersey Test Framework 2.x (org.glassfish.jersey).
 Your task is to generate a JUnit 4 test class that uses JerseyTest + MockedStatic to simulate
 HTTP 500 Internal Server Error responses.
 
-=== MANDATORY JERSEY 2.x IMPORTS (NEVER use com.sun.jersey.*) ===
-The project uses Jersey 2.x. You MUST use these exact imports:
+=== MANDATORY IMPORTS (ALL MUST BE PRESENT IN EVERY GENERATED CLASS) ===
+The following imports are MANDATORY and must ALWAYS appear in the generated class:
+  import static org.junit.Assert.*;       <- REQUIRED: provides assertEquals(), assertTrue(), etc.
+  import org.junit.Test;                  <- REQUIRED: provides @Test annotation
   import org.glassfish.jersey.server.ResourceConfig;
   import org.glassfish.jersey.test.JerseyTest;
   import org.glassfish.jersey.test.TestProperties;
+  import org.mockito.MockedStatic;
+  import org.mockito.Mockito;
+  import javax.ws.rs.core.Response;
 NEVER import from com.sun.jersey.* — that is Jersey 1.x and will cause compilation errors.
 The configure() method MUST return a ResourceConfig, NOT a WebAppDescriptor or AppDescriptor.
+WARNING: 'import static org.junit.Assert.*' is CRITICAL. Without it, the compiler will report
+  'cannot find symbol: method assertEquals(int,int)' because assertEquals() is a static method
+  of org.junit.Assert. This import MUST be present even if you think it is not needed.
 
 === MANDATORY RULES ===
 1. The class MUST extend org.glassfish.jersey.test.JerseyTest.

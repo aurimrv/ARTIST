@@ -942,6 +942,9 @@ class GeneratorAgent(BaseAgent):
 
                 if test_content:
                     test_content = self.code_sanitizer.sanitize_java_code(test_content)
+                    # Programmatic safety net: guarantee all mandatory imports are present
+                    # regardless of what the LLM generated (e.g. missing import static org.junit.Assert.*)
+                    test_content = self.code_sanitizer.ensure_test500_imports(test_content)
 
                 if test_content and self._is_valid_java_code_500(test_content):
                     self.maven_template.add_test_class(

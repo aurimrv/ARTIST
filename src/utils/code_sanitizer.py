@@ -423,3 +423,86 @@ class CodeSanitizer(LoggerMixin):
                 cleaned_lines.append(line)
         
         return '\n'.join(cleaned_lines).strip()
+
+    def ensure_test500_imports(self, java_code: str) -> str:
+        """
+        Programmatic safety net for *Test500.java files.
+
+        Ensures that the following imports are always present, regardless of
+        what the LLM generated.  If an import is already present it is NOT
+        duplicated; if it is missing it is injected immediately after the last
+        existing import statement (or after the package declaration when there
+        are no imports yet).
+
+        Required imports:
+          - import static org.junit.Assert.*;   (assertEquals, assertTrue, …)
+          - import org.junit.Test;               (@Test annotation)
+          - import org.glassfish.jersey.server.ResourceConfig;
+          - import org.glassfish.jersey.test.JerseyTest;
+          - import javax.ws.rs.core.Response;
+          - import org.mockito.MockedStatic;
+          - import org.mockito.Mockito;
+
+        Args:
+            java_code: Java source code string (already sanitized).
+
+        Returns:
+            Java source code with all mandatory imports guaranteed.
+        """
+        MANDATORY_IMPORTS = [
+            "import static org.junit.Assert.*;",
+            "import org.junit.Test;",
+            "import org.glassfish.jersey.server.ResourceConfig;",
+            "import org.glassfish.jersey.test.JerseyTest;",
+            "import javax.ws.rs.core.Response;",
+            "import org.mockito.MockedStatic;",
+            "import org.mockito.Mockito;",
+        ]
+
+        lines = java_code.split('\n')
+
+        # Determine which mandatory imports are already present
+        missing = []
+        for imp in MANDATORY_IMPORTS:
+            # Normalise whitespace for the check
+            normalised = ' '.join(imp.split())
+            already_present = any(' '.join(l.split()) == normalised for l in lines)
+            if not already_present:
+                missing.append(imp)
+
+        if not missing:
+            return java_code  # Nothing to do
+
+        # Find the best insertion point:
+        #   1. After the last 'import …;' line
+        #   2. Fallback: after the 'package …;' line
+        #   3. Last resort: prepend to the file
+        last_import_idx = None
+        package_idx = None
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith('import '):
+                last_import_idx = i
+            elif stripped.startswith('package '):
+                package_idx = i
+
+        if last_import_idx is not None:
+            insert_after = last_import_idx
+        elif package_idx is not None:
+            insert_after = package_idx
+        else:
+            insert_after = -1  # Prepend
+
+        # Build the injection block
+        injection = [''] + missing  # blank line separator before the block
+
+        if insert_after == -1:
+            new_lines = missing + [''] + lines
+        else:
+            new_lines = lines[:insert_after + 1] + injection + lines[insert_after + 1:]
+
+        injected = ', '.join(m.replace('import ', '').rstrip(';') for m in missing)
+        self.logger.info(
+            f"[Test500 import guard] Injected {len(missing)} missing import(s): {injected}"
+        )
+        return '\n'.join(new_lines)
