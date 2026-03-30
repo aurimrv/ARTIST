@@ -11,6 +11,7 @@ from ..config.models import (
     AgentConfig, SystemConfig, ProjectContext, 
     GenerationResult, TestScenario
 )
+from ..utils.maven_runner import MavenRunner
 
 
 class CoordinatorAgent(BaseAgent):
@@ -26,6 +27,7 @@ class CoordinatorAgent(BaseAgent):
         super().__init__(config, system_config)
         self._agents = {}
         self._current_project: Optional[ProjectContext] = None
+        self._maven_runner = MavenRunner()
     
     async def _initialize_impl(self):
         """Initialize the coordinator and its sub-agents."""
@@ -438,6 +440,13 @@ class CoordinatorAgent(BaseAgent):
                 compiled_ok = True
                 self.logger.info(f"[Phase 3] {class_name}: compilation skipped")
             else:
+                # Run `mvn clean` once before starting compile attempts for this
+                # group.  This prevents stale/inconsistent .class files in the
+                # `target` directory (left by a previously failed group) from
+                # causing every subsequent group to fail with "0 parsed errors".
+                self.logger.info(f"[Phase 3] Running mvn clean before compiling {class_name}")
+                await self._maven_runner.clean_project(context.maven_project_dir)
+
                 for compile_attempt in range(1, max_compile_attempts + 1):
                     self.logger.info(f"[Phase 3] Compiling: {class_name} (attempt {compile_attempt}/{max_compile_attempts})")
                     scenarios_as_str = "\n".join([str(s) for s in group_scenarios])

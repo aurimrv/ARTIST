@@ -96,12 +96,23 @@ class CompilerCorrectorAgent(BaseAgent):
             self.log_progress("Analyzing compilation errors", 2, 4)
             errors = compilation_result['errors']
             self.logger.info(f"Found {len(errors)} compilation errors")
-            
+
+            # Guard: if the regex parser found nothing but Maven clearly failed,
+            # pass the raw compiler output to the LLM so it can still attempt
+            # a correction using the full compiler message as context.
+            raw_compiler_output = compilation_result.get('output', '')
+            if not errors and raw_compiler_output:
+                self.logger.warning(
+                    "Compilation failed but no structured errors were parsed. "
+                    "Will pass raw compiler output to LLM for correction."
+                )
+
             # Step 3: Fix compilation errors iteratively
             self.log_progress("Fixing compilation errors", 3, 4)
             scenarios = input_data['scenarios']
             correction_result = await self._fix_compilation_errors(
-                project_dir, generated_files, errors, scenarios
+                project_dir, generated_files, errors, scenarios,
+                raw_compiler_output=raw_compiler_output
             )
             
             # Step 4: Final compilation verification
@@ -221,49 +232,92 @@ class CompilerCorrectorAgent(BaseAgent):
         project_dir: Path,
         generated_files: List[Path],
         errors: List[CompilationError],
-        scenarios: str
+        scenarios: str,
+        raw_compiler_output: str = ""
     ) -> Dict[str, Any]:
         """
         Fix compilation errors iteratively.
-        
+
         Args:
             project_dir: Project directory
             generated_files: List of generated files
-            errors: List of compilation errors
-        
+            errors: List of compilation errors parsed from Maven output
+            scenarios: Test scenarios string
+            raw_compiler_output: Full raw Maven output, used as fallback context
+                when the structured parser could not extract any errors but the
+                build still failed (e.g. due to a format the regex did not match).
+
         Returns:
             Correction result dictionary
         """
         corrected_files = []
         attempts = 0
         current_errors = errors.copy()
-        
+        current_raw_output = raw_compiler_output
+
+        # When the structured parser returns no errors but the build failed,
+        # synthesise a single "unparsed" error entry per generated file so the
+        # while-loop below can still execute and forward the raw output to the
+        # LLM for correction.
+        if not current_errors and current_raw_output:
+            self.logger.warning(
+                "No structured errors available — synthesising raw-output entries "
+                f"for {len(generated_files)} file(s) so LLM correction can proceed."
+            )
+            for gf in generated_files:
+                current_errors.append(CompilationError(
+                    file_path=str(gf),
+                    line_number=0,
+                    column_number=0,
+                    error_type="unparsed",
+                    message=current_raw_output[:4000],   # truncate to avoid token bloat
+                    full_error=current_raw_output[:4000]
+                ))
+
         while current_errors and attempts < self.max_correction_attempts:
             attempts += 1
             self.logger.info(f"Correction attempt {attempts}/{self.max_correction_attempts}")
-            
+
             # Group errors by file
             errors_by_file = self._group_errors_by_file(current_errors)
-            
+
             files_corrected_this_round = []
-            
+
             for file_path, file_errors in errors_by_file.items():
                 self.logger.info(f"Fixing {len(file_errors)} errors in {file_path}")
-                
+
                 # Attempt to fix errors in this file
                 correction_successful = await self._fix_file_errors(
                     Path(file_path), file_errors, scenarios
                 )
-                
+
                 if correction_successful:
                     files_corrected_this_round.append(file_path)
                     if file_path not in corrected_files:
                         corrected_files.append(file_path)
-            
+
             # Re-compile to check if errors are fixed
             compilation_result = await self._compile_project(project_dir)
             current_errors = compilation_result.get('errors', [])
-            
+            current_raw_output = compilation_result.get('output', '')
+
+            # If structured errors are still empty but build is still failing,
+            # re-synthesise raw-output entries for the next iteration.
+            if not compilation_result['success'] and not current_errors and current_raw_output:
+                self.logger.warning(
+                    f"After attempt {attempts}: build still failing but parser returned 0 errors. "
+                    "Re-synthesising raw-output entries for next LLM attempt."
+                )
+                for gf in generated_files:
+                    current_errors.append(CompilationError(
+                        file_path=str(gf),
+                        line_number=0,
+                        column_number=0,
+                        error_type="unparsed",
+                        message=current_raw_output[:4000],
+                        full_error=current_raw_output[:4000]
+                    ))
+
             if compilation_result['success']:
                 self.logger.info(f"All compilation errors fixed after {attempts} attempts")
                 break
@@ -271,7 +325,7 @@ class CompilerCorrectorAgent(BaseAgent):
                 self.logger.info(
                     f"After attempt {attempts}: {len(current_errors)} errors remaining"
                 )
-        
+
         # Prepare result message
         if not current_errors:
             message = f"Successfully fixed all compilation errors in {attempts} attempts"
@@ -279,7 +333,7 @@ class CompilerCorrectorAgent(BaseAgent):
             message = f"Reached maximum attempts ({self.max_correction_attempts}). {len(current_errors)} errors remain"
         else:
             message = f"Fixed some errors in {attempts} attempts. {len(current_errors)} errors remain"
-        
+
         return {
             'message': message,
             'corrected_files': corrected_files,
@@ -387,7 +441,7 @@ class CompilerCorrectorAgent(BaseAgent):
             
             # Generate corrected code using LLM
             corrected_content = await self.openrouter_client.fix_compilation_errors(
-                code=original_content,
+                code=content,
                 errors=errors_text,
                 scenarios=scenarios,
                 model=self.get_model_name(),
@@ -408,7 +462,7 @@ class CompilerCorrectorAgent(BaseAgent):
                 # LLM changed a .statusCode(N) value and add @Ignore with reason.
                 corrected_content, sc_violations = (
                     self.code_sanitizer.enforce_status_code_immutability(
-                        original_content, corrected_content
+                        content, corrected_content
                     )
                 )
                 if sc_violations:

@@ -279,42 +279,76 @@ class MavenRunner(LoggerMixin):
         # Combine stdout and stderr for analysis
         output = maven_result.stdout + "\n" + maven_result.stderr
         
-        # Pattern for Java compilation errors
-        error_pattern = r'\[ERROR\]\s+([^:]+):(\d+):\s*(?:error:\s*)?(.+)'
-        
-        for match in re.finditer(error_pattern, output, re.MULTILINE):
-            file_path = match.group(1).strip()
-            line_number = int(match.group(2))
-            error_message = match.group(3).strip()
-            
-            # Extract more details if available
-            column_number = 0
-            error_type = "compilation"
-            
-            # Look for column information
-            column_match = re.search(r'column (\d+)', error_message)
-            if column_match:
-                column_number = int(column_match.group(1))
-            
-            # Determine error type
-            if "cannot find symbol" in error_message.lower():
-                error_type = "symbol_not_found"
-            elif "package does not exist" in error_message.lower():
-                error_type = "package_not_found"
-            elif "method" in error_message.lower() and "cannot be applied" in error_message.lower():
-                error_type = "method_signature"
-            elif "incompatible types" in error_message.lower():
-                error_type = "type_mismatch"
-            
+        # Maven emits Java compiler errors in two possible formats:
+        #
+        # Format A (javac via maven-compiler-plugin, most common):
+        #   [ERROR] /path/to/File.java:[42,15] error: cannot find symbol
+        #
+        # Format B (older maven-compiler-plugin or certain configurations):
+        #   [ERROR] /path/to/File.java:42: error: cannot find symbol
+        #
+        # Both formats must be captured.
+
+        # Format A: [ERROR] <path>:[<line>,<col>] <message>
+        pattern_a = re.compile(
+            r'^\[ERROR\]\s+([^\[]+):\[(\d+),(\d+)\]\s+(?:error:\s*)?(.+)$',
+            re.MULTILINE
+        )
+        # Format B: [ERROR] <path>:<line>: <message>
+        pattern_b = re.compile(
+            r'^\[ERROR\]\s+([^:\[]+):(\d+):\s+(?:error:\s*)?(.+)$',
+            re.MULTILINE
+        )
+
+        seen = set()  # deduplicate by (file, line, message)
+
+        def _classify(message: str) -> str:
+            msg = message.lower()
+            if "cannot find symbol" in msg:
+                return "symbol_not_found"
+            if "package does not exist" in msg:
+                return "package_not_found"
+            if "method" in msg and "cannot be applied" in msg:
+                return "method_signature"
+            if "incompatible types" in msg:
+                return "type_mismatch"
+            return "compilation"
+
+        for match in pattern_a.finditer(output):
+            file_path    = match.group(1).strip()
+            line_number  = int(match.group(2))
+            column_number = int(match.group(3))
+            error_message = match.group(4).strip()
+            key = (file_path, line_number, error_message)
+            if key in seen:
+                continue
+            seen.add(key)
             errors.append(CompilationError(
                 file_path=file_path,
                 line_number=line_number,
                 column_number=column_number,
-                error_type=error_type,
+                error_type=_classify(error_message),
                 message=error_message,
                 full_error=match.group(0)
             ))
-        
+
+        for match in pattern_b.finditer(output):
+            file_path    = match.group(1).strip()
+            line_number  = int(match.group(2))
+            error_message = match.group(3).strip()
+            key = (file_path, line_number, error_message)
+            if key in seen:
+                continue
+            seen.add(key)
+            errors.append(CompilationError(
+                file_path=file_path,
+                line_number=line_number,
+                column_number=0,
+                error_type=_classify(error_message),
+                message=error_message,
+                full_error=match.group(0)
+            ))
+
         return errors
     
     def parse_test_failures(self, maven_result: MavenResult) -> List[Dict[str, Any]]:
