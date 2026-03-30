@@ -394,11 +394,7 @@ class CompilerCorrectorAgent(BaseAgent):
             
             # Apply corrections if any were made
             if corrected_content and corrected_content != original_content:
-                # Backup original file
-                backup_path = file_path.with_suffix(f"{file_path.suffix}.backup")
-                backup_path.write_text(original_content, encoding='utf-8')
-                
-                # Write corrected content
+                # Write corrected content (versioning is handled by TestVersionManager)
                 file_path.write_text(corrected_content, encoding='utf-8')
                 
                 self.logger.info(f"Applied corrections to {file_path}")

@@ -1113,34 +1113,47 @@ class TestCorrectorAgent(BaseAgent):
     def _add_ignore_annotation(self, content: str, test_method: str, reason: str) -> str:
         """
         Add @Ignore annotation to a specific test method.
-        
+
+        If the method already has an @Ignore annotation immediately before its
+        @Test declaration the annotation is NOT added again, preventing the
+        "not a repeatable annotation type" compilation error that occurs when
+        two @Ignore annotations are stacked on the same method (e.g. one from
+        the status-code guard and another from the persistent-failure path).
+
         Args:
             content: File content
             test_method: Name of the test method
             reason: Reason for ignoring the test
-        
+
         Returns:
-            Modified content with @Ignore annotation
+            Modified content with @Ignore annotation (or unchanged if already present)
         """
         import re
-        
+
         # Escape special characters in reason for Java string
         escaped_reason = reason.replace('"', '\\"').replace('\n', '\\n')
-        
+
+        # Guard: if the method is already annotated with @Ignore, skip it.
+        # This prevents stacking two @Ignore annotations on the same @Test,
+        # which javac rejects as a non-repeatable annotation type.
+        already_ignored_pattern = rf'@Ignore\s*(?:\([^)]*\)\s*)?@Test(?:\s*\([^)]*\))?\s*\n\s*public\s+void\s+{re.escape(test_method)}\s*\('
+        if re.search(already_ignored_pattern, content, re.MULTILINE):
+            return content
+
         # Pattern to find the test method
         # Look for @Test annotation followed by method declaration
         pattern = rf'(\s*)@Test(\s*\([^)]*\))?\s*\n(\s*)public\s+void\s+{re.escape(test_method)}\s*\('
-        
+
         def replacement(match):
             indent = match.group(1)
             test_params = match.group(2) or ""
             method_indent = match.group(3)
-            
+
             # Add @Ignore annotation before @Test (no blank line)
             return f'{indent}@Ignore("{escaped_reason}")\n{indent}@Test{test_params}\n{method_indent}public void {test_method}('
-        
+
         modified_content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
-        
+
         # Check if we need to add the import for @Ignore
         if modified_content != content and '@Ignore' in modified_content:
             if 'import org.junit.Ignore;' not in modified_content:
@@ -1148,6 +1161,6 @@ class TestCorrectorAgent(BaseAgent):
                 import_pattern = r'(import org\.junit\.Test;)'
                 import_replacement = r'\1\nimport org.junit.Ignore;'
                 modified_content = re.sub(import_pattern, import_replacement, modified_content)
-        
+
         return modified_content
 
