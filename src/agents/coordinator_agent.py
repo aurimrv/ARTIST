@@ -507,26 +507,27 @@ class CoordinatorAgent(BaseAgent):
                         'scenarios': scenarios_as_str,
                         'test_class': class_name  # hint for isolated execution
                     })
-                    failures = test_result.get('failures', [])
-                    ignored = test_result.get('ignored', [])
-                    if isinstance(failures, list):
-                        failure_count = len(failures)
-                    else:
-                        failure_count = int(failures) if failures else 0
+                    # TestCorrectorAgent returns 'remaining_failures' (int),
+                    # 'ignored_tests' (list) and 'test_statistics' (dict).
+                    remaining_failures = test_result.get('remaining_failures', 0)
+                    ignored = test_result.get('ignored_tests', [])
+                    stats = test_result.get('test_statistics', {})
+                    error_count = stats.get('errors', 0)
 
                     all_ignored_tests.extend(ignored if isinstance(ignored, list) else [])
 
-                    if failure_count == 0 or test_result.get('success'):
-                        stats = test_result.get('statistics', {})
+                    # Consider the group done only when there are no failures AND
+                    # no test errors (e.g. @Before/@After exceptions that Surefire
+                    # reports as errors rather than failures).
+                    if (remaining_failures == 0 and error_count == 0) or test_result.get('success'):
                         passed = stats.get('tests_run', '?')
-                        failed_count_stat = stats.get('failures', 0) + stats.get('errors', 0)
-                        self.logger.info(f"[Phase 4] {class_name}: {passed} passed, {failed_count_stat} failed")
+                        failed_count_stat = stats.get('failures', 0) + error_count
+                        self.logger.info(f"[Phase 4] {class_name}: {passed} passed, {failed_count_stat} failed/errored")
                         break
                     else:
-                        if isinstance(failures, list):
-                            all_test_failures.extend([str(f) for f in failures])
                         self.logger.warning(
-                            f"[Phase 4] {class_name}: {failure_count} failures on attempt {test_attempt}/{max_test_attempts}"
+                            f"[Phase 4] {class_name}: {remaining_failures} failures, "
+                            f"{error_count} errors on attempt {test_attempt}/{max_test_attempts}"
                         )
 
             self.logger.info(f"Group {class_name}: DONE")

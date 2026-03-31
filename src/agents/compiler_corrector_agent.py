@@ -256,17 +256,37 @@ class CompilerCorrectorAgent(BaseAgent):
         current_raw_output = raw_compiler_output
 
         # When the structured parser returns no errors but the build failed,
-        # synthesise a single "unparsed" error entry per generated file so the
-        # while-loop below can still execute and forward the raw output to the
-        # LLM for correction.
+        # try to identify which file(s) the raw Maven output is pointing at.
+        # This covers the case where an EARLIER file in the source directory
+        # (not the newly-generated one) causes the build to fail — e.g. a
+        # non-ASCII character that triggers a javac warning-as-error in batch
+        # compilation, or a test method that the TestCorrector left with an
+        # unhandled runtime error.  By scanning the raw output for file paths
+        # we can pass the CORRECT file to the LLM rather than always blaming
+        # the newest generated file.
         if not current_errors and current_raw_output:
+            # Attempt to extract file paths mentioned anywhere in the raw output
+            import re as _re
+            path_mentions = _re.findall(
+                r'(/[^\s:]+\.java)',
+                current_raw_output
+            )
+            # Deduplicate while preserving order
+            seen_paths: list = []
+            for p in path_mentions:
+                if p not in seen_paths and Path(p).exists():
+                    seen_paths.append(p)
+
+            target_files = seen_paths if seen_paths else [str(gf) for gf in generated_files]
+
             self.logger.warning(
                 "No structured errors available — synthesising raw-output entries "
-                f"for {len(generated_files)} file(s) so LLM correction can proceed."
+                f"for {len(target_files)} file(s) so LLM correction can proceed: "
+                + ", ".join(Path(p).name for p in target_files)
             )
-            for gf in generated_files:
+            for fp in target_files:
                 current_errors.append(CompilationError(
-                    file_path=str(gf),
+                    file_path=fp,
                     line_number=0,
                     column_number=0,
                     error_type="unparsed",
@@ -302,15 +322,24 @@ class CompilerCorrectorAgent(BaseAgent):
             current_raw_output = compilation_result.get('output', '')
 
             # If structured errors are still empty but build is still failing,
-            # re-synthesise raw-output entries for the next iteration.
+            # re-synthesise raw-output entries for the next iteration, again
+            # preferring files explicitly mentioned in the raw output.
             if not compilation_result['success'] and not current_errors and current_raw_output:
+                import re as _re
+                path_mentions = _re.findall(r'(/[^\s:]+\.java)', current_raw_output)
+                seen_paths: list = []
+                for p in path_mentions:
+                    if p not in seen_paths and Path(p).exists():
+                        seen_paths.append(p)
+                target_files = seen_paths if seen_paths else [str(gf) for gf in generated_files]
                 self.logger.warning(
                     f"After attempt {attempts}: build still failing but parser returned 0 errors. "
-                    "Re-synthesising raw-output entries for next LLM attempt."
+                    "Re-synthesising raw-output entries for next LLM attempt: "
+                    + ", ".join(Path(p).name for p in target_files)
                 )
-                for gf in generated_files:
+                for fp in target_files:
                     current_errors.append(CompilationError(
-                        file_path=str(gf),
+                        file_path=fp,
                         line_number=0,
                         column_number=0,
                         error_type="unparsed",
