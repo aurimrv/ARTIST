@@ -385,47 +385,69 @@ class PlannerAgent(BaseAgent):
             # When the spec provides x-parameter-examples at the operation level,
             # these are MANDATORY test scenarios that MUST be generated using
             # the exact parameter values provided by the spec author.
-            # One scenario is created per status code entry in the extension.
-            op_examples: Dict[str, Dict[str, Any]] = getattr(
+            # One scenario is created per example entry (each element in the list).
+            #
+            # op_examples structure (after parser fix):
+            #   { "200": [{"_name": "typical", "n": 2, "x": 1.5}, ...],
+            #     "400": [{"_name": "invalid", "n": -1, "x": 0.0}, ...] }
+            op_examples: Dict[str, List[Dict[str, Any]]] = getattr(
                 endpoint, 'operation_parameter_examples', {}
             )
             mandatory_status_codes: set = set()
+
+            # Count total mandatory scenarios across all status codes
+            total_mandatory = sum(len(v) for v in op_examples.values())
             if op_examples:
                 self.logger.info(
-                    f"Generating {len(op_examples)} mandatory scenario(s) from "
+                    f"Generating {total_mandatory} mandatory scenario(s) from "
                     f"x-parameter-examples for {endpoint.method} {endpoint.path}"
                 )
-                for status_str, param_values in op_examples.items():
-                    try:
-                        status_int = int(status_str)
-                    except (ValueError, TypeError):
-                        self.logger.warning(
-                            f"Skipping x-parameter-examples entry with non-integer "
-                            f"status key '{status_str}' on {endpoint.path}"
-                        )
-                        continue
 
-                    # Skip 5xx — handled exclusively by *500Test.java pipeline
-                    if 500 <= status_int < 600:
-                        continue
-
-                    mandatory_status_codes.add(status_int)
-                    is_negative = status_int >= 400
-                    suffix = (
-                        _STATUS_DESCRIPTIONS.get(status_int, 'error').lower().replace(' ', '_')
-                        if is_negative
-                        else 'spec_example'
+            for status_str, example_list in op_examples.items():
+                try:
+                    status_int = int(status_str)
+                except (ValueError, TypeError):
+                    self.logger.warning(
+                        f"Skipping x-parameter-examples entry with non-integer "
+                        f"status key '{status_str}' on {endpoint.path}"
                     )
+                    continue
+
+                # Skip 5xx — handled exclusively by *500Test.java pipeline
+                if 500 <= status_int < 600:
+                    continue
+
+                mandatory_status_codes.add(status_int)
+                is_negative = status_int >= 400
+                status_label = _STATUS_DESCRIPTIONS.get(status_int, 'error').lower().replace(' ', '_')
+
+                for idx, param_values in enumerate(example_list):
+                    # Use _name from the example dict as the scenario suffix if present.
+                    # Always prefix with the status code to avoid name collisions when
+                    # the same _name (e.g. 'invalid_type') appears under multiple status
+                    # codes (e.g. 401, 403, 404) for the same endpoint.
+                    example_name = param_values.get('_name', '')
+                    if example_name:
+                        suffix = f"{status_int}_{self._sanitize_path(example_name)}"
+                    elif is_negative:
+                        suffix = f"{status_int}_{status_label}_{idx + 1}" if len(example_list) > 1 else f"{status_int}_{status_label}"
+                    else:
+                        suffix = f"{status_int}_spec_example_{idx + 1}" if len(example_list) > 1 else f"{status_int}_spec_example"
+
                     scenario_name = (
                         f"test_{endpoint.method.lower()}_"
                         f"{self._sanitize_path(endpoint.path)}_"
                         f"{suffix}"
                     )
+                    # Strip _name from the parameters passed to the test
+                    clean_params = {k: v for k, v in param_values.items() if k != '_name'}
                     description = (
                         f"Test {endpoint.method} {endpoint.path} – "
                         f"spec-provided x-parameter-examples for status {status_int} "
                         f"{_STATUS_DESCRIPTIONS.get(status_int, '')} "
-                        f"(mandatory: values from API specification)"
+                        f"(mandatory: values from API specification"
+                        + (f", example '{example_name}'" if example_name else "")
+                        + ")"
                     )
                     scenarios.append(
                         TestScenario(
@@ -433,20 +455,23 @@ class PlannerAgent(BaseAgent):
                             description=description,
                             endpoint=endpoint.path,
                             method=endpoint.method,
-                            parameters=dict(param_values),
+                            parameters=clean_params,
                             expected_status=status_int,
                             is_negative_test=is_negative,
-                            test_data=dict(param_values),
+                            test_data=clean_params,
                         )
                     )
 
             # ── Positive / success scenario (if not already covered) ────────
             # Use operation_parameter_examples[success_status] values if available,
             # otherwise fall back to parameter_examples and heuristics.
+            # When the spec provides multiple success examples, the first one is
+            # already emitted above as a mandatory scenario; we only add the
+            # generic success scenario when NO mandatory success example exists.
             success_status = self._pick_success_status(grouped_codes, endpoint)
             if success_status not in mandatory_status_codes:
                 parameters = self._extract_parameters_with_examples(
-                    endpoint, op_examples.get(str(success_status))
+                    endpoint, None  # no single-example override; use per-param examples
                 )
                 scenarios.append(
                     TestScenario(
@@ -464,10 +489,16 @@ class PlannerAgent(BaseAgent):
                         test_data=parameters,
                     )
                 )
+                # Use these parameters as the primary values for extra-example scenarios
             else:
-                # Use the mandatory scenario's parameters as the primary parameters
-                # for generating extra example scenarios below
-                parameters = op_examples.get(str(success_status), {})
+                # Use the first mandatory success example's parameters as the primary
+                # values for generating extra per-parameter example scenarios below
+                first_success_examples = op_examples.get(str(success_status), [{}])
+                parameters = {
+                    k: v
+                    for k, v in (first_success_examples[0] if first_success_examples else {}).items()
+                    if k != '_name'
+                }
 
             # ── Additional scenarios from per-parameter examples ────────────
             # When the spec provides multiple example values for individual
@@ -647,7 +678,7 @@ class PlannerAgent(BaseAgent):
         self,
         endpoint: Any,
         grouped_codes: Dict[str, List[int]],
-        op_examples: Optional[Dict[str, Dict[str, Any]]] = None,
+        op_examples: Optional[Dict[str, List[Dict[str, Any]]]] = None,
         mandatory_status_codes: Optional[set] = None,
     ) -> List[TestScenario]:
         """
@@ -664,28 +695,30 @@ class PlannerAgent(BaseAgent):
         ``x-parameter-examples`` are used for the corresponding status codes.
         Status codes already covered by mandatory scenarios (from x-parameter-examples)
         are skipped to avoid duplicates.
+
+        Note: ``op_examples`` is now ``Dict[str, List[Dict[str, Any]]]`` (list of
+        example dicts per status code). All mandatory scenarios for those status codes
+        are already generated in ``_generate_scenarios_from_spec``; this method only
+        generates fallback generic scenarios for status codes NOT covered by mandatory
+        examples.
         """
         scenarios: List[TestScenario] = []
         op_examples = op_examples or {}
         mandatory_status_codes = mandatory_status_codes or set()
 
-        # ── 1. Invalid parameters scenario ──────────────────────────────────
+        # ── 1. Invalid parameters scenario ────────────────────────────────────
         if endpoint.parameters:
             error_status = self._pick_client_error_status(grouped_codes)
 
             # Skip if this error status was already covered by a mandatory
             # x-parameter-examples scenario
             if error_status not in mandatory_status_codes:
-                # Use x-parameter-examples values for this error status if available,
-                # otherwise fall back to None (invalid/missing parameters)
-                if str(error_status) in op_examples:
-                    invalid_params = dict(op_examples[str(error_status)])
-                    param_source = f"spec-provided x-parameter-examples"
-                else:
-                    invalid_params = {
-                        param.get('name', 'unknown'): None for param in endpoint.parameters
-                    }
-                    param_source = "invalid/missing parameters"
+                # For this generic fallback scenario, use None values (invalid/missing)
+                # since all specific examples are already emitted as mandatory scenarios
+                invalid_params = {
+                    param.get('name', 'unknown'): None for param in endpoint.parameters
+                }
+                param_source = "invalid/missing parameters"
 
                 scenarios.append(
                     TestScenario(
@@ -918,14 +951,35 @@ class PlannerAgent(BaseAgent):
     # ------------------------------------------------------------------
 
     def _remove_duplicates(self, scenarios: List[TestScenario]) -> List[TestScenario]:
-        """Remove duplicate scenarios."""
+        """
+        Remove duplicate scenarios.
+
+        Two scenarios are considered duplicates only when they share the same
+        *name* **and** the same (method, endpoint, is_negative_test,
+        expected_status) tuple.  Using the name as the primary key ensures that
+        multiple mandatory scenarios derived from ``x-parameter-examples`` for
+        the same status code are all preserved (they have distinct names such as
+        ``test_get_..._typical`` vs ``test_get_..._edge_case``).
+        """
         unique_scenarios: List[TestScenario] = []
+        seen_names: set = set()
         seen_signatures: set = set()
 
         for scenario in scenarios:
-            signature = (scenario.method, scenario.endpoint, scenario.is_negative_test, scenario.expected_status)
-            if signature not in seen_signatures:
+            name = scenario.name
+            signature = (
+                scenario.method,
+                scenario.endpoint,
+                scenario.is_negative_test,
+                scenario.expected_status,
+            )
+
+            # A scenario is a duplicate only if its name was already seen.
+            # If the name is unique but the signature matches an existing
+            # scenario, we still keep it (different example values, same status).
+            if name not in seen_names:
                 unique_scenarios.append(scenario)
+                seen_names.add(name)
                 seen_signatures.add(signature)
 
         return unique_scenarios
@@ -956,16 +1010,15 @@ class PlannerAgent(BaseAgent):
             Merged, deduplicated list with at least as many entries as *original*.
         """
         merged = list(original)
-        seen_signatures: set = {
-            (s.method, s.endpoint, s.is_negative_test, s.expected_status)
-            for s in original
-        }
+        # Use scenario name as the primary deduplication key so that multiple
+        # mandatory x-parameter-examples scenarios for the same status code are
+        # all preserved (they have distinct names).
+        seen_names: set = {s.name for s in original}
 
         for scenario in enhanced:
-            sig = (scenario.method, scenario.endpoint, scenario.is_negative_test, scenario.expected_status)
-            if sig not in seen_signatures:
+            if scenario.name not in seen_names:
                 merged.append(scenario)
-                seen_signatures.add(sig)
+                seen_names.add(scenario.name)
 
         return merged
 

@@ -385,34 +385,58 @@ class OpenAPIParser(LoggerMixin):
 
     def _extract_operation_parameter_examples(
         self, operation: Dict[str, Any]
-    ) -> Dict[str, Dict[str, Any]]:
+    ) -> Dict[str, List[Dict[str, Any]]]:
         """
         Extract operation-level ``x-parameter-examples`` extension.
 
         This extension is placed directly on the operation object (not inside
-        individual parameters) and maps each expected HTTP status code to a
-        complete set of parameter values that should produce that response.
+        individual parameters) and maps each expected HTTP status code to one
+        or more complete sets of parameter values that should produce that
+        response.
 
-        Example in spec::
+        Two formats are supported:
+
+        **Array format** (preferred — multiple named examples per status code)::
+
+            get:
+              x-parameter-examples:
+                "200":
+                  - {"_name": "typical", "n": 2, "x": 1.5}
+                  - {"_name": "edge_case", "n": 0, "x": 1e-10}
+                "400":
+                  - {"_name": "invalid_type", "n": "abc", "x": 2.0}
+
+        **Dict format** (legacy — single example per status code)::
 
             get:
               x-parameter-examples:
                 "200": {"n": 5, "x": 3.14159}
                 "400": {"n": -1, "x": 0.0}
 
-        Returns a dict mapping status code string → {param_name: value}.
+        Returns a dict mapping status code string → list of param dicts.
+        Each param dict contains the parameter names as keys; the reserved
+        ``_name`` key (if present) is preserved as a scenario label.
         Returns an empty dict if the extension is absent or malformed.
         """
         raw = operation.get('x-parameter-examples')
         if not isinstance(raw, dict):
             return {}
 
-        result: Dict[str, Dict[str, Any]] = {}
+        result: Dict[str, List[Dict[str, Any]]] = {}
         for status_code, param_set in raw.items():
-            if isinstance(param_set, dict):
-                # Normalise status code to string
-                result[str(status_code)] = dict(param_set)
-            # Non-dict values are silently ignored (malformed extension)
+            key = str(status_code)
+            if isinstance(param_set, list):
+                # Array format: each element is a named example dict
+                entries: List[Dict[str, Any]] = []
+                for item in param_set:
+                    if isinstance(item, dict):
+                        entries.append(dict(item))
+                if entries:
+                    result[key] = entries
+            elif isinstance(param_set, dict):
+                # Legacy dict format: wrap in a list for uniform handling
+                result[key] = [dict(param_set)]
+            # Other types are silently ignored (malformed extension)
         return result
 
     def _extract_response_examples(
