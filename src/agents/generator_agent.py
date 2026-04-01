@@ -28,6 +28,17 @@ class GeneratorAgent(BaseAgent):
         self.code_sanitizer = CodeSanitizer()
         self.openrouter_client = None
     
+    def set_output_dir(self, output_dir: str) -> None:
+        """Propagate the run-specific output directory to the OpenRouter client.
+
+        Must be called after initialize() so that self.openrouter_client is ready.
+        The llm_interactions/ subdirectory will be created inside *output_dir*,
+        at the same level as maven-project/.
+        """
+        if self.openrouter_client and hasattr(self.openrouter_client, 'set_output_dir'):
+            self.openrouter_client.set_output_dir(output_dir)
+            self.logger.debug(f"GeneratorAgent: llm_interactions set to {output_dir}/llm_interactions")
+
     async def _initialize_impl(self):
         """Initialize the generator agent components."""
         self.logger.info("Initializing Generator Agent")

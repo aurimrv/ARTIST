@@ -35,6 +35,12 @@ class APIEndpoint:
     response_examples: Dict[str, List[Any]] = field(default_factory=dict)
     # Raw request body examples extracted from requestBody.content[*].examples
     request_body_examples: List[Any] = field(default_factory=list)
+    # Operation-level x-parameter-examples extension.
+    # Maps HTTP status code (str) → dict of {param_name: value}.
+    # Example: {"200": {"n": 5, "x": 3.14}, "400": {"n": -1, "x": 0.0}}
+    # This allows the spec author to provide concrete input sets per expected
+    # response code, which the planner uses to generate mandatory test scenarios.
+    operation_parameter_examples: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -255,6 +261,7 @@ class OpenAPIParser(LoggerMixin):
         parameter_examples = self._extract_parameter_examples(parameters)
         response_examples = self._extract_response_examples(responses)
         request_body_examples = self._extract_request_body_examples(request_body)
+        operation_parameter_examples = self._extract_operation_parameter_examples(operation)
 
         return APIEndpoint(
             path=path,
@@ -269,6 +276,7 @@ class OpenAPIParser(LoggerMixin):
             parameter_examples=parameter_examples,
             response_examples=response_examples,
             request_body_examples=request_body_examples,
+            operation_parameter_examples=operation_parameter_examples,
         )
 
     def _parse_operation_swagger_2x(
@@ -280,6 +288,7 @@ class OpenAPIParser(LoggerMixin):
 
         parameter_examples = self._extract_parameter_examples(parameters)
         response_examples = self._extract_response_examples(responses)
+        operation_parameter_examples = self._extract_operation_parameter_examples(operation)
 
         return APIEndpoint(
             path=path,
@@ -294,6 +303,7 @@ class OpenAPIParser(LoggerMixin):
             parameter_examples=parameter_examples,
             response_examples=response_examples,
             request_body_examples=[],
+            operation_parameter_examples=operation_parameter_examples,
         )
 
     # ------------------------------------------------------------------
@@ -371,6 +381,38 @@ class OpenAPIParser(LoggerMixin):
             if examples:
                 result[name] = examples
 
+        return result
+
+    def _extract_operation_parameter_examples(
+        self, operation: Dict[str, Any]
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Extract operation-level ``x-parameter-examples`` extension.
+
+        This extension is placed directly on the operation object (not inside
+        individual parameters) and maps each expected HTTP status code to a
+        complete set of parameter values that should produce that response.
+
+        Example in spec::
+
+            get:
+              x-parameter-examples:
+                "200": {"n": 5, "x": 3.14159}
+                "400": {"n": -1, "x": 0.0}
+
+        Returns a dict mapping status code string → {param_name: value}.
+        Returns an empty dict if the extension is absent or malformed.
+        """
+        raw = operation.get('x-parameter-examples')
+        if not isinstance(raw, dict):
+            return {}
+
+        result: Dict[str, Dict[str, Any]] = {}
+        for status_code, param_set in raw.items():
+            if isinstance(param_set, dict):
+                # Normalise status code to string
+                result[str(status_code)] = dict(param_set)
+            # Non-dict values are silently ignored (malformed extension)
         return result
 
     def _extract_response_examples(

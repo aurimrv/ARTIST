@@ -378,34 +378,101 @@ class PlannerAgent(BaseAgent):
         scenarios: List[TestScenario] = []
 
         for endpoint in api_spec.endpoints:
-            parameters = self._extract_parameters_with_examples(endpoint)
             responses: Dict[str, Any] = getattr(endpoint, 'responses', {})
             grouped_codes = _parse_response_codes(responses)
 
-            # ── Positive / success scenario ────────────────────────────────
-            success_status = self._pick_success_status(grouped_codes, endpoint)
-            scenarios.append(
-                TestScenario(
-                    name=f"test_{endpoint.method.lower()}_{self._sanitize_path(endpoint.path)}_success",
-                    description=(
-                        f"Test {endpoint.method} {endpoint.path} – "
-                        f"success case ({success_status} "
-                        f"{_STATUS_DESCRIPTIONS.get(success_status, '')})"
-                    ),
-                    endpoint=endpoint.path,
-                    method=endpoint.method,
-                    parameters=parameters,
-                    expected_status=success_status,
-                    is_negative_test=False,
-                    test_data=parameters,
-                )
+            # ── Operation-level x-parameter-examples (MANDATORY) ───────────
+            # When the spec provides x-parameter-examples at the operation level,
+            # these are MANDATORY test scenarios that MUST be generated using
+            # the exact parameter values provided by the spec author.
+            # One scenario is created per status code entry in the extension.
+            op_examples: Dict[str, Dict[str, Any]] = getattr(
+                endpoint, 'operation_parameter_examples', {}
             )
+            mandatory_status_codes: set = set()
+            if op_examples:
+                self.logger.info(
+                    f"Generating {len(op_examples)} mandatory scenario(s) from "
+                    f"x-parameter-examples for {endpoint.method} {endpoint.path}"
+                )
+                for status_str, param_values in op_examples.items():
+                    try:
+                        status_int = int(status_str)
+                    except (ValueError, TypeError):
+                        self.logger.warning(
+                            f"Skipping x-parameter-examples entry with non-integer "
+                            f"status key '{status_str}' on {endpoint.path}"
+                        )
+                        continue
 
-            # ── Additional scenarios from x-parameter-examples ──────────────
-            # When the spec provides multiple example values for a parameter
-            # via x-parameter-examples (or any other standard examples field),
-            # generate one extra success scenario per additional example value
-            # beyond the first (which is already covered by the primary scenario).
+                    # Skip 5xx — handled exclusively by *500Test.java pipeline
+                    if 500 <= status_int < 600:
+                        continue
+
+                    mandatory_status_codes.add(status_int)
+                    is_negative = status_int >= 400
+                    suffix = (
+                        _STATUS_DESCRIPTIONS.get(status_int, 'error').lower().replace(' ', '_')
+                        if is_negative
+                        else 'spec_example'
+                    )
+                    scenario_name = (
+                        f"test_{endpoint.method.lower()}_"
+                        f"{self._sanitize_path(endpoint.path)}_"
+                        f"{suffix}"
+                    )
+                    description = (
+                        f"Test {endpoint.method} {endpoint.path} – "
+                        f"spec-provided x-parameter-examples for status {status_int} "
+                        f"{_STATUS_DESCRIPTIONS.get(status_int, '')} "
+                        f"(mandatory: values from API specification)"
+                    )
+                    scenarios.append(
+                        TestScenario(
+                            name=scenario_name,
+                            description=description,
+                            endpoint=endpoint.path,
+                            method=endpoint.method,
+                            parameters=dict(param_values),
+                            expected_status=status_int,
+                            is_negative_test=is_negative,
+                            test_data=dict(param_values),
+                        )
+                    )
+
+            # ── Positive / success scenario (if not already covered) ────────
+            # Use operation_parameter_examples[success_status] values if available,
+            # otherwise fall back to parameter_examples and heuristics.
+            success_status = self._pick_success_status(grouped_codes, endpoint)
+            if success_status not in mandatory_status_codes:
+                parameters = self._extract_parameters_with_examples(
+                    endpoint, op_examples.get(str(success_status))
+                )
+                scenarios.append(
+                    TestScenario(
+                        name=f"test_{endpoint.method.lower()}_{self._sanitize_path(endpoint.path)}_success",
+                        description=(
+                            f"Test {endpoint.method} {endpoint.path} – "
+                            f"success case ({success_status} "
+                            f"{_STATUS_DESCRIPTIONS.get(success_status, '')})"
+                        ),
+                        endpoint=endpoint.path,
+                        method=endpoint.method,
+                        parameters=parameters,
+                        expected_status=success_status,
+                        is_negative_test=False,
+                        test_data=parameters,
+                    )
+                )
+            else:
+                # Use the mandatory scenario's parameters as the primary parameters
+                # for generating extra example scenarios below
+                parameters = op_examples.get(str(success_status), {})
+
+            # ── Additional scenarios from per-parameter examples ────────────
+            # When the spec provides multiple example values for individual
+            # parameters via param.x-parameter-examples, generate one extra
+            # success scenario per additional example value beyond the first.
             extra_scenarios = self._generate_extra_example_scenarios(
                 endpoint, success_status, parameters
             )
@@ -414,7 +481,7 @@ class PlannerAgent(BaseAgent):
             # ── Negative / error scenarios ─────────────────────────────────
             if self.system_config.test_generation.generate_negative_tests:
                 negative_scenarios = self._generate_negative_scenarios(
-                    endpoint, grouped_codes
+                    endpoint, grouped_codes, op_examples, mandatory_status_codes
                 )
                 scenarios.extend(negative_scenarios)
 
@@ -577,7 +644,11 @@ class PlannerAgent(BaseAgent):
     # ------------------------------------------------------------------
 
     def _generate_negative_scenarios(
-        self, endpoint: Any, grouped_codes: Dict[str, List[int]]
+        self,
+        endpoint: Any,
+        grouped_codes: Dict[str, List[int]],
+        op_examples: Optional[Dict[str, Dict[str, Any]]] = None,
+        mandatory_status_codes: Optional[set] = None,
     ) -> List[TestScenario]:
         """
         Generate negative test scenarios for an endpoint.
@@ -588,39 +659,57 @@ class PlannerAgent(BaseAgent):
         - Forbidden access                       → 403  (if in spec)
         - Resource not found                     → 404  (if in spec)
         - Server errors                          → 5xx  (if in spec, informational only)
+
+        When ``op_examples`` is provided, the parameter values from
+        ``x-parameter-examples`` are used for the corresponding status codes.
+        Status codes already covered by mandatory scenarios (from x-parameter-examples)
+        are skipped to avoid duplicates.
         """
         scenarios: List[TestScenario] = []
+        op_examples = op_examples or {}
+        mandatory_status_codes = mandatory_status_codes or set()
 
-        # ── 1. Invalid parameters scenario ────────────────────────────────
+        # ── 1. Invalid parameters scenario ──────────────────────────────────
         if endpoint.parameters:
-            invalid_params = {
-                param.get('name', 'unknown'): None for param in endpoint.parameters
-            }
             error_status = self._pick_client_error_status(grouped_codes)
 
-            scenarios.append(
-                TestScenario(
-                    name=(
-                        f"test_{endpoint.method.lower()}_"
-                        f"{self._sanitize_path(endpoint.path)}_invalid_params"
-                    ),
-                    description=(
-                        f"Test {endpoint.method} {endpoint.path} – "
-                        f"invalid/missing parameters "
-                        f"(expected {error_status} "
-                        f"{_STATUS_DESCRIPTIONS.get(error_status, 'Client Error')})"
-                    ),
-                    endpoint=endpoint.path,
-                    method=endpoint.method,
-                    parameters=invalid_params,
-                    expected_status=error_status,
-                    is_negative_test=True,
-                    test_data=invalid_params,
+            # Skip if this error status was already covered by a mandatory
+            # x-parameter-examples scenario
+            if error_status not in mandatory_status_codes:
+                # Use x-parameter-examples values for this error status if available,
+                # otherwise fall back to None (invalid/missing parameters)
+                if str(error_status) in op_examples:
+                    invalid_params = dict(op_examples[str(error_status)])
+                    param_source = f"spec-provided x-parameter-examples"
+                else:
+                    invalid_params = {
+                        param.get('name', 'unknown'): None for param in endpoint.parameters
+                    }
+                    param_source = "invalid/missing parameters"
+
+                scenarios.append(
+                    TestScenario(
+                        name=(
+                            f"test_{endpoint.method.lower()}_"
+                            f"{self._sanitize_path(endpoint.path)}_invalid_params"
+                        ),
+                        description=(
+                            f"Test {endpoint.method} {endpoint.path} – "
+                            f"{param_source} "
+                            f"(expected {error_status} "
+                            f"{_STATUS_DESCRIPTIONS.get(error_status, 'Client Error')})"
+                        ),
+                        endpoint=endpoint.path,
+                        method=endpoint.method,
+                        parameters=invalid_params,
+                        expected_status=error_status,
+                        is_negative_test=True,
+                        test_data=invalid_params,
+                    )
                 )
-            )
 
         # ── 2. Unauthorized scenario (401) ─────────────────────────────────
-        if 401 in grouped_codes.get('client_error', []):
+        if 401 in grouped_codes.get('client_error', []) and 401 not in mandatory_status_codes:
             scenarios.append(
                 TestScenario(
                     name=(
@@ -641,7 +730,7 @@ class PlannerAgent(BaseAgent):
             )
 
         # ── 3. Forbidden scenario (403) ────────────────────────────────────
-        if 403 in grouped_codes.get('client_error', []):
+        if 403 in grouped_codes.get('client_error', []) and 403 not in mandatory_status_codes:
             scenarios.append(
                 TestScenario(
                     name=(
@@ -662,7 +751,7 @@ class PlannerAgent(BaseAgent):
             )
 
         # ── 4. Not-found scenario (404) ────────────────────────────────────
-        if 404 in grouped_codes.get('client_error', []):
+        if 404 in grouped_codes.get('client_error', []) and 404 not in mandatory_status_codes:
             # Build a path that forces a 404 (non-existent resource)
             not_found_path = endpoint.path + '/non-existent-resource'
             scenarios.append(
@@ -684,7 +773,7 @@ class PlannerAgent(BaseAgent):
                 )
             )
 
-        # ── 5. Server-error scenarios (5xx) ────────────────────────────────
+        # ── 5. Server-error scenarios (5xx) ─────────────────────────────────
         #   These are informational: we document what the server may return
         #   but do not actively trigger them in automated tests.
         for server_error_code in grouped_codes.get('server_error', []):
@@ -699,11 +788,18 @@ class PlannerAgent(BaseAgent):
     # Parameter helpers
     # ------------------------------------------------------------------
 
-    def _extract_parameters_with_examples(self, endpoint: Any) -> Dict[str, Any]:
+    def _extract_parameters_with_examples(
+        self,
+        endpoint: Any,
+        op_example_override: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
         Extract parameters with priority for examples from OpenAPI specification.
 
         Priority order (highest → lowest):
+        0. ``op_example_override``                — operation-level x-parameter-examples
+           for the specific status code (e.g. the 200 entry).  When provided,
+           these values are used directly and override all other sources.
         1. ``endpoint.parameter_examples[name]``  — pre-extracted by the parser
            (covers ``param.example``, ``param.examples``,
            ``param.x-parameter-examples``, ``param.schema.example``,
@@ -721,8 +817,11 @@ class PlannerAgent(BaseAgent):
             param_schema = param.get('schema', {})
             param_type = param_schema.get('type', 'string')
 
-            # 1. Use pre-extracted examples (first value is the primary example)
-            if param_name in pre_extracted and pre_extracted[param_name]:
+            # 0. Operation-level x-parameter-examples override (highest priority)
+            if op_example_override and param_name in op_example_override:
+                parameters[param_name] = op_example_override[param_name]
+            # 1. Use pre-extracted per-parameter examples (first value)
+            elif param_name in pre_extracted and pre_extracted[param_name]:
                 parameters[param_name] = pre_extracted[param_name][0]
             # 2. Enum fallback
             elif 'enum' in param_schema and param_schema['enum']:
@@ -1017,13 +1116,23 @@ Your task is to:
      dedicated Jersey+Mockito class (*500Test.java) generated separately. Omit all 5xx scenarios.
 6. Add dependency information between scenarios
 7. Improve scenario descriptions
-8. IMPORTANT: When the spec provides "parameter_examples" for an endpoint, you MUST use
+8. CRITICAL — Mandatory x-parameter-examples scenarios:
+   Some scenarios in the input list have descriptions containing the phrase
+   "(mandatory: values from API specification)". These scenarios were generated
+   directly from the "x-parameter-examples" OpenAPI extension and their parameter
+   values are EXACT values provided by the API author.
+   You MUST:
+   a) PRESERVE every mandatory scenario in the output — never remove or merge them.
+   b) NEVER change the "parameters" or "expected_status" of a mandatory scenario.
+   c) You MAY improve the "description" field only.
+   d) You MAY add NEW additional scenarios alongside the mandatory ones.
+9. IMPORTANT: When the spec provides "parameter_examples" for an endpoint, you MUST use
    those exact values as the primary test inputs for that parameter. You MAY also create
    ADDITIONAL scenarios that use alternative values from the examples list (when multiple
    examples are provided) to maximise coverage.
-9. When the spec provides "response_examples", use them to validate response body structure
-   in the scenario description and test_data fields.
-10. Replace any remaining generic placeholder values (e.g. "test-value") with domain-realistic
+10. When the spec provides "response_examples", use them to validate response body structure
+    in the scenario description and test_data fields.
+11. Replace any remaining generic placeholder values (e.g. "test-value") with domain-realistic
     values appropriate to the endpoint semantics.
 
 Rules:
@@ -1036,6 +1145,8 @@ Rules:
 - You MAY add new scenarios beyond the {scenario_count} minimum
 - When multiple parameter examples are available, create one scenario per distinct example
   value to maximise input coverage
+- NEVER alter the parameters or expected_status of any scenario whose description
+  contains "(mandatory: values from API specification)"
 
 Return ONLY a JSON object with this structure:
 {{

@@ -296,7 +296,20 @@ class CoordinatorAgent(BaseAgent):
             Generation result for this attempt
         """
         self.logger.info("Starting test generation workflow")
-        
+
+        # Propagate the run-specific output directory to ALL agents so that every
+        # OpenRouterClient instance writes llm_interactions files inside the
+        # generated-tests_YYYY-MM-DD_HH-MM-SS/ directory, at the same level as
+        # maven-project/.  The planner is handled separately in _run_planning_phase
+        # (it must be set before planner.process() is called); here we cover the
+        # remaining agents that are used in later phases.
+        run_dir = str(context.generated_test_dir)
+        for agent_name in ('generator', 'compiler_corrector', 'test_corrector'):
+            agent = self._agents.get(agent_name)
+            if agent and hasattr(agent, 'set_output_dir'):
+                agent.set_output_dir(run_dir)
+                self.logger.debug(f"{agent_name}: llm_interactions → {run_dir}/llm_interactions")
+
         # Step 1: Planning phase
         self.log_progress("Phase 1: Analyzing API and creating test scenarios", 1, 5)
         scenarios = await self._run_planning_phase(context)
