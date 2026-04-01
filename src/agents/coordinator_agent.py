@@ -747,6 +747,13 @@ class CoordinatorAgent(BaseAgent):
         
         planner = self._agents['planner']
         
+        # Propagate the run-specific output directory to the planner (and transitively
+        # to the OpenRouter client) so that all llm_interactions files are written
+        # inside the run-specific directory (e.g. generated-tests_YYYY-MM-DD_HH-MM-SS/)
+        # at the same level as maven-project/, instead of the parent output directory.
+        if hasattr(planner, 'set_output_dir'):
+            planner.set_output_dir(str(context.generated_test_dir))
+        
         planning_input = {
             'api_spec_path': str(context.api_spec_path),
             'api_src_path': str(context.api_src_path) if context.api_src_path is not None else None,

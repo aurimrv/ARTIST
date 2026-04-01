@@ -740,3 +740,235 @@ class CodeSanitizer(LoggerMixin):
                 f"(block not found verbatim in corrected code)"
             )
         return patched
+
+    # ------------------------------------------------------------------
+    # RestAssured lifecycle enforcement
+    # ------------------------------------------------------------------
+
+    def enforce_restassured_lifecycle(self, java_code: str) -> str:
+        """
+        Ensure every generated test class has the correct RestAssured lifecycle
+        setup, regardless of what the LLM produced.
+
+        The following transformations are applied deterministically (no regex
+        on method bodies — only line-by-line scanning):
+
+        1. ``import io.restassured.RestAssured;`` is added to the imports block
+           if not already present.
+
+        2. Inside ``@BeforeClass`` / ``setupClass()``: any bare ``baseURI =``
+           assignment is replaced with ``RestAssured.baseURI =``.
+
+        3. Inside ``@Before`` / ``setupTestData()``: the method body is
+           replaced with a single ``RestAssured.baseURI = <url>;`` statement,
+           preserving the original URL extracted from the ``@BeforeClass``
+           block (or falling back to the first ``baseURI =`` assignment found
+           anywhere in the file).
+
+        4. Inside ``@After`` / ``cleanupTestData()``: the method body is
+           replaced with a single ``RestAssured.reset();`` call.
+
+        The method is intentionally generic — it does not know anything about
+        the API under test.  It works for any JUnit 4 / Rest Assured test class
+        produced by the generator.
+
+        Args:
+            java_code: Java source code to patch.
+
+        Returns:
+            Patched Java source code.
+        """
+        if not java_code or not java_code.strip():
+            return java_code
+
+        lines = java_code.split('\n')
+
+        # ------------------------------------------------------------------
+        # Step 1: Ensure "import io.restassured.RestAssured;" is present
+        # ------------------------------------------------------------------
+        restassured_import = 'import io.restassured.RestAssured;'
+        has_import = any(restassured_import in ln for ln in lines)
+        if not has_import:
+            # Insert right before the first "import static io.restassured" line,
+            # or before the first import line if that is not found.
+            insert_at = None
+            for i, ln in enumerate(lines):
+                stripped = ln.strip()
+                if stripped.startswith('import static io.restassured') or \
+                   stripped.startswith('import io.restassured') or \
+                   (stripped.startswith('import ') and insert_at is None):
+                    insert_at = i
+                    break
+            if insert_at is not None:
+                lines.insert(insert_at, restassured_import)
+            else:
+                # Fallback: insert after the package declaration
+                for i, ln in enumerate(lines):
+                    if ln.strip().startswith('package '):
+                        lines.insert(i + 1, '')
+                        lines.insert(i + 2, restassured_import)
+                        break
+
+        # ------------------------------------------------------------------
+        # Step 2: Extract the base URL from the file (used in @Before fix)
+        # ------------------------------------------------------------------
+        base_url = self._extract_base_url_from_code(lines)
+
+        # ------------------------------------------------------------------
+        # Steps 3 & 4: Fix @BeforeClass, @Before and @After method bodies
+        # ------------------------------------------------------------------
+        lines = self._fix_lifecycle_methods(lines, base_url)
+
+        return '\n'.join(lines)
+
+    # ------------------------------------------------------------------
+    # Internal helpers for RestAssured lifecycle enforcement
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_base_url_from_code(lines: list) -> str:
+        """
+        Scan the lines for the first ``baseURI =`` or ``RestAssured.baseURI =``
+        assignment and return the quoted URL string.
+
+        Falls back to ``"http://localhost:8080"`` if nothing is found.
+        """
+        for ln in lines:
+            stripped = ln.strip()
+            # Match:  baseURI = "...";  or  RestAssured.baseURI = "...";
+            for prefix in ('RestAssured.baseURI =', 'baseURI ='):
+                if prefix in stripped:
+                    # Extract the value between the first pair of double-quotes
+                    start = stripped.find('"')
+                    end = stripped.rfind('"')
+                    if 0 <= start < end:
+                        return stripped[start:end + 1]  # includes the quotes
+        return '"http://localhost:8080"'
+
+    def _fix_lifecycle_methods(self, lines: list, base_url: str) -> list:
+        """
+        Walk through the lines and patch the bodies of the three lifecycle
+        methods:
+
+        * ``setupClass()``   — annotated with ``@BeforeClass``
+        * ``setupTestData()``— annotated with ``@Before``
+        * ``cleanupTestData()`` — annotated with ``@After``
+
+        The patching strategy:
+
+        * For ``setupClass`` and ``setupTestData``: replace any bare
+          ``baseURI = ...;`` with ``RestAssured.baseURI = <base_url>;`` and
+          ensure at least one such statement exists in the body.
+        * For ``cleanupTestData``: replace the entire body with a single
+          ``RestAssured.reset();`` call.
+
+        The method is line-by-line and does not use regex on method bodies.
+        """
+        # We need to identify which annotation precedes each method declaration.
+        # We track the last seen lifecycle annotation.
+        BEFORE_CLASS = 'beforeclass'
+        BEFORE       = 'before'
+        AFTER        = 'after'
+
+        # Lifecycle methods we care about (lower-case for comparison)
+        LIFECYCLE_METHODS = {
+            'setupclass':    BEFORE_CLASS,
+            'setuptestdata': BEFORE,
+            'cleanuptestdata': AFTER,
+        }
+
+        result = list(lines)
+        i = 0
+        while i < len(result):
+            stripped = result[i].strip()
+
+            # Detect a method declaration that matches one of our lifecycle methods
+            matched_lifecycle = None
+            for method_key, lifecycle_type in LIFECYCLE_METHODS.items():
+                # Match "public void methodName(" or "public static void methodName("
+                if (f'void {method_key}(' in stripped.lower() or
+                        f'void {method_key} (' in stripped.lower()):
+                    matched_lifecycle = lifecycle_type
+                    break
+
+            if matched_lifecycle is None:
+                i += 1
+                continue
+
+            # Found the declaration line — now find the opening brace of the body.
+            # The opening brace may be on the same line or the next line.
+            decl_line_idx = i
+            open_brace_idx = None
+            for j in range(i, min(i + 3, len(result))):
+                if '{' in result[j]:
+                    open_brace_idx = j
+                    break
+
+            if open_brace_idx is None:
+                i += 1
+                continue
+
+            # Find the matching closing brace of the method body
+            brace_depth = 0
+            close_brace_idx = None
+            for j in range(open_brace_idx, len(result)):
+                brace_depth += result[j].count('{') - result[j].count('}')
+                if brace_depth <= 0:
+                    close_brace_idx = j
+                    break
+
+            if close_brace_idx is None:
+                i += 1
+                continue
+
+            # Determine indentation from the declaration line
+            indent = len(result[decl_line_idx]) - len(result[decl_line_idx].lstrip())
+            body_indent = ' ' * (indent + 4)
+
+            # Build the replacement body
+            if matched_lifecycle == BEFORE_CLASS:
+                # Replace bare "baseURI =" with "RestAssured.baseURI ="
+                new_body_lines = []
+                has_assignment = False
+                for j in range(open_brace_idx + 1, close_brace_idx):
+                    ln = result[j]
+                    ln_stripped = ln.strip()
+                    if ln_stripped.startswith('baseURI =') and \
+                            not ln_stripped.startswith('RestAssured.baseURI ='):
+                        # Replace bare assignment
+                        ln = ln.replace('baseURI =', 'RestAssured.baseURI =', 1)
+                        has_assignment = True
+                    elif 'RestAssured.baseURI =' in ln_stripped:
+                        has_assignment = True
+                    new_body_lines.append(ln)
+                if not has_assignment:
+                    new_body_lines.insert(0, f'{body_indent}RestAssured.baseURI = {base_url};')
+                # Rebuild the method
+                result = (
+                    result[:open_brace_idx + 1]
+                    + new_body_lines
+                    + result[close_brace_idx:]
+                )
+
+            elif matched_lifecycle == BEFORE:
+                # Replace body with RestAssured.baseURI = <url>;
+                new_body = [f'{body_indent}RestAssured.baseURI = {base_url};']
+                result = (
+                    result[:open_brace_idx + 1]
+                    + new_body
+                    + result[close_brace_idx:]
+                )
+
+            elif matched_lifecycle == AFTER:
+                # Replace body with RestAssured.reset();
+                new_body = [f'{body_indent}RestAssured.reset();']
+                result = (
+                    result[:open_brace_idx + 1]
+                    + new_body
+                    + result[close_brace_idx:]
+                )
+
+            # Advance past the method we just processed
+            i = close_brace_idx + 1
+
+        return result

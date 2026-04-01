@@ -1,39 +1,5 @@
-# Output generted_test with timestamp
+# TODO
 
-# Deal with maven test execution timeout
-
-	- When exiting because of maven timeout, test set must be kept unchanged, i.e, no @Ignore must be included.
-
-# @Ignore message must avoid escape character. Include only simple plain text no special character to avoid compilatio errors due @Ignore messages
-
-
-# Duplicate @Ignore keep just one per @Test
-
-# Parameters
-
---api-spec (opcional) --api-src (mandatory)
---api-src (opcional) --api-spec (mandatory)
-
-# Specification Coverage (closed-box)
-
-## Criar um relatório que demonstre quais testes foram criados para quais itens da especificação em OpenAPI
-
-# Code Coverage (open-box)
-
-## Configurável desde que exista o código fonte .env
-
-USE_COVERGE_INFORMATION=true
-
-## Melhorar projeto Maven dos testes para incluir o plugin de medir a cobertura de código
-
-## Gerar o relatório de cobertura
-
-## Criar um novo agente que, após executar os testes e medir a cobetura, use os dados do relatório par criar novos testes priorizando cobrir áreas não cobertas pelos testes atuais.
-
-# Mapear Input/Output de cada agente
-
-Cada agente poderia receber de entrada as informações em algum formato e produzir sua saída em algum formato para ser consumido para outro agente.
-
-Isso permitiria realizar o processamento passo a passo. Agente por agente. Ou até mesmo ter agentes diferentes consumindo a saída de um agente inicial.
-
-## Code with exit worflows commented
+1 - Adicionar suporte a logging de uso de tokens do LLM (input/output) em arquivo CSV, com nome baseado no seed utilizado.
+2 - Melhorar a estratégia de geração de casos de teste do LLM para explorar múltiplas opções por cenário, resultando em mais casos de teste do que cenários base.
+3 - Implementar a leitura de prompts a partir de um arquivo `prompt.txt` no diretório do programa, removendo a necessidade de passar prompts via linha de comando.

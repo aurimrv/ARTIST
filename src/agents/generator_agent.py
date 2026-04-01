@@ -440,6 +440,11 @@ class GeneratorAgent(BaseAgent):
             if test_content:
                 self.logger.info(f"Sanitizing LLM output for {class_name}")
                 test_content = self.code_sanitizer.sanitize_java_code(test_content)
+                # Enforce correct RestAssured lifecycle methods (@BeforeClass/@Before/@After)
+                # regardless of what the LLM produced — ensures RestAssured.baseURI is
+                # always redefined before each test and RestAssured.reset() is always
+                # called after each test to prevent collateral effects between test sets.
+                test_content = self.code_sanitizer.enforce_restassured_lifecycle(test_content)
             
             # Validate generated content
             if test_content and self._is_valid_java_code(test_content):

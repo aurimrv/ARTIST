@@ -66,12 +66,16 @@ public class {{ class_name }} {
     
     @Before
     public void setUp() {
-        // Setup before each test
+        // Redefine baseURI before each test to prevent collateral effects
+        // when multiple test sets are executed in sequence by Maven Surefire.
+        RestAssured.baseURI = BASE_URL;
     }
     
     @After
     public void tearDown() {
-        // Cleanup after each test
+        // Reset all RestAssured static configuration after each test to
+        // prevent state leakage between test sets executed in sequence.
+        RestAssured.reset();
     }
     
 {% for test_method in test_methods %}

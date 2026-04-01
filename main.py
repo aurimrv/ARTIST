@@ -48,6 +48,11 @@ Examples:
 
   # Generate with Mockito/Jersey Test500 classes (requires api-impl.jar)
   python main.py generate --api-spec api.yaml --output tests/ --api-impl path/to/api-impl.jar
+
+  # Generate with a fixed seed for reproducible LLM outputs
+  python main.py generate --api-spec api.yaml --output tests/ --seed 42
+
+  # Seed can also be set in .env: SEED=42 (or per-agent: PLANNER_SEED=42)
         """
     )
     
@@ -124,6 +129,18 @@ Examples:
             'Maven project and referenced in pom.xml as a system-scoped dependency. '
             'If omitted, the api-impl dependency block is excluded from pom.xml and '
             'no *Test500.java classes are generated.'
+        )
+    )
+    generate_parser.add_argument(
+        '--seed',
+        type=int,
+        default=None,
+        help=(
+            'Global random seed for all LLM agents, making outputs more deterministic '
+            'across runs (overrides SEED in .env when provided). '
+            'Individual agent seeds (PLANNER_SEED, GENERATOR_SEED, etc.) in .env '
+            'still take precedence over this global value. '
+            'Example: --seed 42'
         )
     )
     generate_parser.add_argument(
@@ -227,6 +244,18 @@ async def generate_command(args: argparse.Namespace) -> int:
         # Load configuration
         settings = Settings(args.config)
         system_config = settings.config
+        
+        # Override global seed from CLI if provided (--seed takes precedence over SEED in .env,
+        # but agent-specific seeds from .env such as PLANNER_SEED still take precedence).
+        if args.seed is not None:
+            logger.info(f"Overriding global seed from CLI: --seed {args.seed}")
+            for agent_name, agent_config in system_config.agents.items():
+                agent_seed_env_key = f"{agent_name.upper()}_SEED"
+                if agent_seed_env_key not in settings.env_vars or not settings.env_vars[agent_seed_env_key]:
+                    agent_config.seed = args.seed
+                    logger.debug(f"  {agent_name}: seed set to {args.seed}")
+                else:
+                    logger.debug(f"  {agent_name}: keeping agent-specific seed from .env")
         
         # Create project context
         context = create_project_context(args)

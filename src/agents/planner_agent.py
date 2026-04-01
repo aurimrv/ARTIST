@@ -143,14 +143,39 @@ class PlannerAgent(BaseAgent):
         self.logger.info("Planner Agent initialization complete")
 
     # ===========================================================
-    # DEBUG: Salva snapshots de cenários em ./llm_interactions
+    # DEBUG: Salva snapshots de cenários em llm_interactions
     # ===========================================================
+    def set_output_dir(self, output_dir: str) -> None:
+        """Set the output directory for llm_interactions snapshot files.
+        
+        Called by the coordinator before the planning phase starts, so that
+        all scenario snapshots are written inside the run-specific output
+        directory (same level as maven-project/) instead of ./llm_interactions.
+        Also propagates the directory to the OpenRouter client if available.
+        
+        Args:
+            output_dir: Path to the run output directory.
+        """
+        self._output_dir = output_dir
+        llm_dir = os.path.join(output_dir, 'llm_interactions')
+        os.makedirs(llm_dir, exist_ok=True)
+        self.logger.debug(f"PlannerAgent llm_interactions set to: {llm_dir}")
+        if self.openrouter_client is not None:
+            self.openrouter_client.set_output_dir(output_dir)
+
+    def _llm_interactions_dir(self) -> str:
+        """Return the path to the llm_interactions directory for this run."""
+        if getattr(self, '_output_dir', None):
+            return os.path.join(self._output_dir, 'llm_interactions')
+        return './llm_interactions'
+
     def _save_scenarios_snapshot(self, stage: str, scenarios: List) -> None:
         """Save a JSON snapshot of scenarios at a given pipeline stage."""
         try:
-            os.makedirs("./llm_interactions", exist_ok=True)
+            llm_dir = self._llm_interactions_dir()
+            os.makedirs(llm_dir, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")[:-3]
-            filename = f"./llm_interactions/{timestamp}_scenarios_{stage}.json"
+            filename = os.path.join(llm_dir, f"{timestamp}_scenarios_{stage}.json")
             data = {
                 "stage": stage,
                 "count": len(scenarios),
@@ -376,6 +401,16 @@ class PlannerAgent(BaseAgent):
                 )
             )
 
+            # ── Additional scenarios from x-parameter-examples ──────────────
+            # When the spec provides multiple example values for a parameter
+            # via x-parameter-examples (or any other standard examples field),
+            # generate one extra success scenario per additional example value
+            # beyond the first (which is already covered by the primary scenario).
+            extra_scenarios = self._generate_extra_example_scenarios(
+                endpoint, success_status, parameters
+            )
+            scenarios.extend(extra_scenarios)
+
             # ── Negative / error scenarios ─────────────────────────────────
             if self.system_config.test_generation.generate_negative_tests:
                 negative_scenarios = self._generate_negative_scenarios(
@@ -384,6 +419,66 @@ class PlannerAgent(BaseAgent):
                 scenarios.extend(negative_scenarios)
 
         return scenarios
+
+    def _generate_extra_example_scenarios(
+        self,
+        endpoint: Any,
+        success_status: int,
+        primary_parameters: Dict[str, Any],
+    ) -> List[TestScenario]:
+        """
+        Generate additional test scenarios for each extra example value provided
+        in the OpenAPI specification via ``x-parameter-examples`` (or any of the
+        standard examples fields extracted by the parser).
+
+        The first example value is already used in the primary success scenario.
+        This method creates one additional scenario per *extra* example value
+        (index 1, 2, …) for every parameter that has multiple examples, combining
+        them with the primary values of all other parameters.
+
+        Only non-5xx success scenarios are generated here; 5xx scenarios are
+        handled separately by the *500Test.java generation pipeline.
+        """
+        extra: List[TestScenario] = []
+        pre_extracted: Dict[str, list] = getattr(endpoint, 'parameter_examples', {})
+
+        for param_name, example_values in pre_extracted.items():
+            # Skip if there is only one example (already covered by primary scenario)
+            if len(example_values) <= 1:
+                continue
+
+            for idx, extra_value in enumerate(example_values[1:], start=2):
+                # Build parameter dict: use extra value for this param,
+                # keep primary values for all other params.
+                params_for_scenario = dict(primary_parameters)
+                params_for_scenario[param_name] = extra_value
+
+                scenario_name = (
+                    f"test_{endpoint.method.lower()}_"
+                    f"{self._sanitize_path(endpoint.path)}_"
+                    f"{param_name}_example{idx}"
+                )
+                description = (
+                    f"Test {endpoint.method} {endpoint.path} – "
+                    f"success case with spec-provided example value #{idx} "
+                    f"for parameter '{param_name}' "
+                    f"(expected {success_status} "
+                    f"{_STATUS_DESCRIPTIONS.get(success_status, '')})"
+                )
+                extra.append(
+                    TestScenario(
+                        name=scenario_name,
+                        description=description,
+                        endpoint=endpoint.path,
+                        method=endpoint.method,
+                        parameters=params_for_scenario,
+                        expected_status=success_status,
+                        is_negative_test=False,
+                        test_data=params_for_scenario,
+                    )
+                )
+
+        return extra
 
     # ------------------------------------------------------------------
     # Source-based scenario generation

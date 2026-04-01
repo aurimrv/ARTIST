@@ -44,7 +44,34 @@ class OpenRouterClient(LoggerMixin):
             tokens_per_minute=config.rate_limit_tokens_per_minute
         )
         
+        # Output directory for llm_interactions files.
+        # Defaults to None (falls back to ./llm_interactions) until set by the coordinator.
+        self._output_dir: Optional[str] = None
+        
         self.logger.info(f"Initialized OpenRouter client with base URL: {self.base_url}")
+    
+    def set_output_dir(self, output_dir: str) -> None:
+        """Set the output directory for llm_interactions files.
+        
+        Must be called before any LLM requests are made so that all interaction
+        files are written inside the run-specific output directory instead of
+        the current working directory.
+        
+        Args:
+            output_dir: Path to the run output directory
+                        (e.g. '../rest-ncs-reports/generated-tests_2026-04-01_16-40-00').
+                        The 'llm_interactions' subdirectory will be created inside it.
+        """
+        self._output_dir = output_dir
+        llm_dir = os.path.join(output_dir, 'llm_interactions')
+        os.makedirs(llm_dir, exist_ok=True)
+        self.logger.debug(f"llm_interactions directory set to: {llm_dir}")
+    
+    def _llm_interactions_dir(self) -> str:
+        """Return the path to the llm_interactions directory for this run."""
+        if self._output_dir:
+            return os.path.join(self._output_dir, 'llm_interactions')
+        return './llm_interactions'
     
     @retry(
         stop=stop_after_attempt(3),
@@ -127,9 +154,10 @@ class OpenRouterClient(LoggerMixin):
                 "cost_completion": usage.get("cost_details", {}).get("upstream_inference_completions_cost"),
             }
 
-            os.makedirs("./llm_interactions", exist_ok=True)
+            _llm_dir = self._llm_interactions_dir()
+            os.makedirs(_llm_dir, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")[:-3]
-            filename = f"./llm_interactions/{timestamp}_cost.json"
+            filename = os.path.join(_llm_dir, f"{timestamp}_cost.json")
             with open(filename, "w", encoding="utf-8") as f:
                 json.dump(usage_data, f, indent=2, ensure_ascii=False)
             
@@ -192,10 +220,11 @@ class OpenRouterClient(LoggerMixin):
         # Pode ser removido futuramente apagando este bloco inteiro.
         # ===========================================================
         try:
-            os.makedirs("./llm_interactions", exist_ok=True)
+            _llm_dir = self._llm_interactions_dir()
+            os.makedirs(_llm_dir, exist_ok=True)
             _ts = datetime.now().strftime("%Y%m%d%H%M%S%f")[:-3]
             _op_label = kwargs.pop("_operation_label", "unknown")
-            _prompt_filename = f"./llm_interactions/{_ts}_{_op_label}_prompt.json"
+            _prompt_filename = os.path.join(_llm_dir, f"{_ts}_{_op_label}_prompt.json")
             _prompt_data = {
                 "operation": _op_label,
                 "model": model,
