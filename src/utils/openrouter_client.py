@@ -605,10 +605,11 @@ one specific status code that matches the scenario it is testing.
 IMPORTANT: Return ONLY the Java code without any explanations, comments, or markdown formatting."""
         
         # Format project context
+        base_url = project_context.get('base_url', 'http://localhost:8080')
         project_context_str = f"""Project Context:
 - Package: {project_context.get('package_name', 'com.example.tests')}
 - Test Class Name: {project_context.get('class_name', 'ApiTest')}
-- Base URL: {project_context.get('base_url', 'http://localhost:8080')}
+- Base URL: {base_url}
 - Output Directory: {project_context.get('output_dir', 'output')}
 
 CRITICAL REQUIREMENTS:
@@ -621,6 +622,7 @@ CRITICAL REQUIREMENTS:
 7. setupTestData() and cleanupTestData() MUST always be complementary and symmetric: every entity created in setup must be deleted in cleanup, and no entity should be deleted unless it was created in setup.
 8. The setup method MUST populate the database using POST requests with all necessary data
 9. Ensure POST operations are executed before GET, PUT, or DELETE operations
+9a. PAY ATTENTION to the "Setup Dependencies" and "Teardown Dependencies" listed in the scenarios. If a scenario requires a POST to a parent endpoint before testing a GET on a child endpoint, you MUST include that POST in the setupTestData() method. If it requires a DELETE in the teardown, include it in cleanupTestData().
 10. Each test method should be independent and repeatable
 11. Use proper assertions for status codes and response content
 12. Handle both positive and negative test cases appropriately
@@ -634,24 +636,30 @@ CRITICAL REQUIREMENTS:
 20. STATUS CODE IMMUTABILITY: Each .statusCode(N) assertion MUST use the exact integer N from the OpenAPI spec. anyOf() is STRICTLY PROHIBITED for status code assertions. Do NOT use anyOf(is(200), is(201)) or any similar construct. Do NOT change a status code even within the same HTTP category (e.g. 400 vs 404, 200 vs 201).
 
 SETUP AND CLEANUP METHOD REQUIREMENTS:
-- Create a @Before method called setupTestData()
-- Create a @After method called cleanupTestData()
-- setupTestData() must always create a consistent set of fixture data that is sufficient for all test scenarios.
+- Create a @BeforeClass method called setupTestData()
+- Create a @AfterClass method called cleanupTestData()
+- MANDATORY FIRST STATEMENT: The VERY FIRST statement in setupTestData() MUST be: RestAssured.baseURI = "{base_url}";
+- MANDATORY LAST STATEMENT: The VERY LAST statement in cleanupTestData() MUST be: RestAssured.reset();
+- setupTestData() must always create a consistent set of fixture data that is sufficient for all test scenarios in the class.
 - This includes creating at least one parent entity and all required child entities so that any test can run independently without missing data.
 - setupTestData() must use RestAssured POST endpoints to create fixture data in the correct order (parents before children)
+- CRITICAL: Use ONLY POST endpoints to create data in setupTestData(). NEVER use PUT to create data. If the spec does not have a POST for a resource, do NOT attempt to create it via PUT.
 - cleanupTestData() must use RestAssured DELETE endpoints to remove all created data in reverse order (children before parents) without assertions
 - cleanupTestData() must always remove exactly the data created in setupTestData(), in reverse dependency order.
 - setupTestData() and cleanupTestData() must be resilient to empty or missing response bodies.
 - Both setupTestData() and cleanupTestData() must be symmetric: everything created must be deleted, and nothing should be deleted if it was not created in setupTestData().
 - They must use request parameters as fallback identifiers when no response body is returned.
 - Never fail a test due to attempting to parse an empty response.
-- Only @Before method must validate status codes and ensure operations succeeded
+- Only @BeforeClass method must validate status codes and ensure operations succeeded
 - Both methods must handle errors gracefully to avoid test contamination
 - Create entities in the correct order (parent entities before child entities)
 - Use realistic test data that reflects real-world scenarios
+- PAY CLOSE ATTENTION to the "Setup Dependencies" and "Teardown Dependencies" listed in each scenario. These are derived from the API specification and tell you EXACTLY which POST calls are needed in setupTestData() and which DELETE calls are needed in cleanupTestData(). Use them as the authoritative guide for the setup/teardown logic.
 
 TEST METHOD REQUIREMENTS:
 - Each @Test method should test exactly one scenario
+- CRITICAL: @Test methods MUST NOT create or delete data. All data creation MUST happen in @BeforeClass and all data deletion MUST happen in @AfterClass.
+- CRITICAL: @Test methods MUST ONLY execute the specific HTTP method and endpoint defined in the scenario. Do NOT add extra POST or DELETE calls inside the @Test method.
 - Use descriptive method names that explain what is being tested
 - Include both positive and negative test cases
 - Use RestAssured's given().when().then() pattern
@@ -748,25 +756,32 @@ OpenAPI specification and are IMMUTABLE.
 CRITICAL: Return ONLY the Java code. No explanations. No markdown. No code fences.
 Start directly with the package declaration."""
 
+        focused_base_url = project_context.get('base_url', 'http://localhost:8080')
         project_context_str = f"""Project Context:
 - Package: {project_context.get('package_name', 'com.example.tests')}
 - Test Class Name: {project_context.get('class_name', 'ApiTest')}
-- Base URL: {project_context.get('base_url', 'http://localhost:8080')}
+- Base URL: {focused_base_url}
 
 REQUIREMENTS:
 1. JUnit 4 annotations (@Test, @Before, @After, @BeforeClass)
 2. Rest Assured (import static io.restassured.RestAssured.*)
 3. Java 8 compatibility
-4. @Before setupTestData() — create all necessary fixture data using POST
-5. @After cleanupTestData() — delete all created data in reverse dependency order
+4. @BeforeClass setupTestData() — create all necessary fixture data using POST
+   - MANDATORY: The VERY FIRST statement MUST be: RestAssured.baseURI = "{focused_base_url}";
+   - Use ONLY POST endpoints to create data. NEVER use PUT to create data.
+5. @AfterClass cleanupTestData() — delete all created data in reverse dependency order
+   - MANDATORY: The VERY LAST statement MUST be: RestAssured.reset();
 6. setupTestData() and cleanupTestData() MUST be symmetric: every entity created must be deleted
 7. Each @Test method is independent and uses the pre-created fixture data
+7a. PAY ATTENTION to the "Setup Dependencies" and "Teardown Dependencies" listed in the scenarios to know exactly which POSTs and DELETEs are required for the endpoints being tested.
 8. Each @Test must use @Test(timeout = 60000)
-9. Validate response body is not null before JsonPath usage (try-catch around JSON parsing)
-10. Generate EXACTLY the scenarios listed — one @Test per scenario, no more
-11. STATUS CODE IMMUTABILITY: Each .statusCode(N) assertion uses the EXACT integer N from the
+9. CRITICAL: @Test methods MUST NOT create or delete data. All data creation MUST happen in @BeforeClass and all data deletion MUST happen in @AfterClass.
+10. CRITICAL: @Test methods MUST ONLY execute the specific HTTP method and endpoint defined in the scenario. Do NOT add extra POST or DELETE calls inside the @Test method.
+11. Validate response body is not null before JsonPath usage (try-catch around JSON parsing)
+12. Generate EXACTLY the scenarios listed — one @Test per scenario, no more
+13. STATUS CODE IMMUTABILITY: Each .statusCode(N) assertion uses the EXACT integer N from the
     scenario's expected_status field. anyOf() is FORBIDDEN. Do NOT change any status code value.
-12. SKIP 5xx SCENARIOS: If any scenario has expected_status 500 or any other 5xx code, skip it
+14. SKIP 5xx SCENARIOS: If any scenario has expected_status 500 or any other 5xx code, skip it
     entirely. Do NOT generate a @Test for it. Do NOT add @Ignore. Just omit it.
 
 IMPORTS REQUIRED:

@@ -4,7 +4,7 @@ Data models for configuration and system state.
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from pathlib import Path
 
 def create_timestamp() -> str:
@@ -109,6 +109,8 @@ class TestScenario:
     expected_response_schema: Optional[Dict[str, Any]] = None
     is_negative_test: bool = False
     test_data: Optional[Dict[str, Any]] = None
+    setup_dependencies: Optional[List[Dict[str, Any]]] = None
+    teardown_dependencies: Optional[List[Dict[str, Any]]] = None
 
 
 @dataclass

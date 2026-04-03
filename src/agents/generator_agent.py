@@ -504,6 +504,12 @@ class GeneratorAgent(BaseAgent):
             if scenario.test_data:
                 scenarios_text += f"- Test Data: {scenario.test_data}\n"
 
+            if scenario.setup_dependencies:
+                scenarios_text += f"- Setup Dependencies: {scenario.setup_dependencies}\n"
+
+            if scenario.teardown_dependencies:
+                scenarios_text += f"- Teardown Dependencies: {scenario.teardown_dependencies}\n"
+
             scenarios_text += "\n"
 
         scenarios_text += (
@@ -551,6 +557,12 @@ class GeneratorAgent(BaseAgent):
 
             if scenario.test_data:
                 scenarios_text += f"- Test Data: {scenario.test_data}\n"
+
+            if scenario.setup_dependencies:
+                scenarios_text += f"- Setup Dependencies: {scenario.setup_dependencies}\n"
+
+            if scenario.teardown_dependencies:
+                scenarios_text += f"- Teardown Dependencies: {scenario.teardown_dependencies}\n"
 
             scenarios_text += "\n"
 

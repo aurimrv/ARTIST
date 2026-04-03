@@ -328,6 +328,100 @@ class PlannerAgent(BaseAgent):
     # Scenario generation orchestration
     # ------------------------------------------------------------------
 
+    def _extract_dependencies(self, api_spec: Any) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
+        """
+        Extract setup and teardown dependencies for each endpoint path.
+
+        The algorithm analyses the full path hierarchy to determine which
+        ancestor resources must be created (via POST) before a given endpoint
+        can be exercised, and which resources must be deleted (via DELETE)
+        after the test is complete.
+
+        Strategy
+        --------
+        1. Build a map of ``path -> set of HTTP methods`` from the spec.
+        2. For every path, walk up the path hierarchy (removing the last
+           segment at each step) to collect all ancestor paths.
+        3. A path is a *creatable ancestor* if it supports POST and at least
+           one of its path segments is a parameter (``{param}``) — meaning it
+           represents a named resource that must be created before child
+           resources can be accessed.
+        4. Setup dependencies are the ordered list of POST calls needed to
+           create the full resource hierarchy (root ancestor first).
+        5. Teardown dependencies are the DELETE calls in reverse order
+           (deepest resource first, then parents), using the most specific
+           DELETE available for each level.
+
+        Returns a mapping: path -> {'setup': [...], 'teardown': [...]}
+        """
+        dependencies: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+
+        # ── Step 1: collect all paths and their available methods ──────────
+        path_methods: Dict[str, set] = {}
+        for endpoint in api_spec.endpoints:
+            path = endpoint.path
+            if path not in path_methods:
+                path_methods[path] = set()
+            path_methods[path].add(endpoint.method.upper())
+
+        # ── Step 2 & 3: for each path, build the ancestor hierarchy ────────
+        for path in path_methods.keys():
+            setup: List[Dict[str, Any]] = []
+            teardown: List[Dict[str, Any]] = []
+
+            # Collect all ancestor paths (from root down to the direct parent)
+            parts = path.split('/')
+            ancestor_paths: List[str] = []
+            for i in range(1, len(parts)):
+                ancestor = '/'.join(parts[:i])
+                if ancestor and ancestor in path_methods:
+                    ancestor_paths.append(ancestor)
+
+            # ── Setup: POST calls in top-down order ────────────────────────
+            # An ancestor needs a POST setup call when:
+            #   a) it supports POST, AND
+            #   b) its last segment is a path parameter (it is a named resource
+            #      that must be explicitly created, not just a collection)
+            #      OR it is the direct parent of the current path and the
+            #      current path itself has path parameters.
+            for anc in ancestor_paths:
+                anc_parts = anc.split('/')
+                last_seg = anc_parts[-1] if anc_parts else ''
+                # The ancestor is a named-resource endpoint if its last segment
+                # is a path parameter (e.g. /products/{productName})
+                is_named_resource = last_seg.startswith('{') and last_seg.endswith('}')
+                if 'POST' in path_methods[anc] and is_named_resource:
+                    setup.append({'method': 'POST', 'endpoint': anc})
+
+            # Also include a POST on the direct parent when the current path
+            # itself has path parameters and the parent supports POST
+            # (handles the case where the parent is a collection, e.g. /products)
+            if len(parts) > 1:
+                direct_parent = '/'.join(parts[:-1])
+                if (direct_parent in path_methods
+                        and 'POST' in path_methods[direct_parent]
+                        and not any(d['endpoint'] == direct_parent for d in setup)):
+                    # Only add if the current path has at least one param segment
+                    if any(seg.startswith('{') and seg.endswith('}') for seg in parts):
+                        setup.append({'method': 'POST', 'endpoint': direct_parent})
+
+            # ── Teardown: DELETE calls in bottom-up order ──────────────────
+            # Delete the current resource first (if DELETE is available),
+            # then walk up the ancestor list in reverse order.
+            if 'DELETE' in path_methods[path]:
+                teardown.append({'method': 'DELETE', 'endpoint': path})
+
+            for anc in reversed(ancestor_paths):
+                anc_parts = anc.split('/')
+                last_seg = anc_parts[-1] if anc_parts else ''
+                is_named_resource = last_seg.startswith('{') and last_seg.endswith('}')
+                if 'DELETE' in path_methods[anc] and is_named_resource:
+                    teardown.append({'method': 'DELETE', 'endpoint': anc})
+
+            dependencies[path] = {'setup': setup, 'teardown': teardown}
+
+        return dependencies
+
     async def _generate_scenarios(
         self,
         api_spec: Any,
@@ -337,7 +431,17 @@ class PlannerAgent(BaseAgent):
         """Generate test scenarios from API specification and source code."""
         scenarios: List[TestScenario] = []
 
+        # Extract dependencies from spec
+        dependencies = self._extract_dependencies(api_spec)
+
         spec_scenarios = self._generate_scenarios_from_spec(api_spec, base_url)
+        
+        # Inject dependencies into scenarios
+        for scenario in spec_scenarios:
+            path_deps = dependencies.get(scenario.endpoint, {})
+            scenario.setup_dependencies = path_deps.get('setup', [])
+            scenario.teardown_dependencies = path_deps.get('teardown', [])
+            
         scenarios.extend(spec_scenarios)
         self.logger.info(
             f"Generated {len(spec_scenarios)} scenarios from OpenAPI specification"
@@ -347,6 +451,13 @@ class PlannerAgent(BaseAgent):
             source_scenarios = self._generate_scenarios_from_source(
                 implementation_analysis, base_url
             )
+            
+            # Inject dependencies into source scenarios
+            for scenario in source_scenarios:
+                path_deps = dependencies.get(scenario.endpoint, {})
+                scenario.setup_dependencies = path_deps.get('setup', [])
+                scenario.teardown_dependencies = path_deps.get('teardown', [])
+                
             scenarios.extend(source_scenarios)
             self.logger.info(
                 f"Generated {len(source_scenarios)} scenarios from source code analysis"
@@ -1210,9 +1321,11 @@ Return ONLY a JSON object with this structure:
             "endpoint": "/valid/endpoint/path",
             "method": "HTTP_METHOD",
             "parameters": {{"param": "value"}},
-            "expected_status": 200,
+             "expected_status": 200,
             "is_negative_test": false,
-            "test_data": {{"param": "value"}}
+            "test_data": {{"param": "value"}},
+            "setup_dependencies": [{{"method": "POST", "endpoint": "/api/parent"}}],
+            "teardown_dependencies": [{{"method": "DELETE", "endpoint": "/api/parent/{{id}}"}}]
         }}
     ]
 }}
@@ -1340,6 +1453,8 @@ Focus on creating realistic, executable test scenarios that follow proper API us
                     expected_status=scenario_data.get('expected_status', 200),
                     is_negative_test=scenario_data.get('is_negative_test', False),
                     test_data=scenario_data.get('test_data', {}),
+                    setup_dependencies=scenario_data.get('setup_dependencies', []),
+                    teardown_dependencies=scenario_data.get('teardown_dependencies', []),
                 )
                 enhanced_scenarios.append(scenario)
 
