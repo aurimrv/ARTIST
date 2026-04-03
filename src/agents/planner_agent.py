@@ -570,6 +570,7 @@ class PlannerAgent(BaseAgent):
                             expected_status=status_int,
                             is_negative_test=is_negative,
                             test_data=clean_params,
+                            content_type=endpoint.content_type,
                         )
                     )
 
@@ -598,6 +599,7 @@ class PlannerAgent(BaseAgent):
                         expected_status=success_status,
                         is_negative_test=False,
                         test_data=parameters,
+                        content_type=endpoint.content_type,
                     )
                 )
                 # Use these parameters as the primary values for extra-example scenarios
@@ -684,6 +686,7 @@ class PlannerAgent(BaseAgent):
                         expected_status=success_status,
                         is_negative_test=False,
                         test_data=params_for_scenario,
+                        content_type=endpoint.content_type,
                     )
                 )
 
@@ -723,6 +726,7 @@ class PlannerAgent(BaseAgent):
                     expected_status=default_success,
                     is_negative_test=False,
                     test_data={},
+                    content_type=getattr(endpoint_data, 'content_type', None),
                 )
             )
 
@@ -849,6 +853,7 @@ class PlannerAgent(BaseAgent):
                         expected_status=error_status,
                         is_negative_test=True,
                         test_data=invalid_params,
+                        content_type=endpoint.content_type,
                     )
                 )
 
@@ -870,6 +875,7 @@ class PlannerAgent(BaseAgent):
                     expected_status=401,
                     is_negative_test=True,
                     test_data={},
+                    content_type=endpoint.content_type,
                 )
             )
 
@@ -891,6 +897,7 @@ class PlannerAgent(BaseAgent):
                     expected_status=403,
                     is_negative_test=True,
                     test_data={},
+                    content_type=endpoint.content_type,
                 )
             )
 
@@ -914,6 +921,7 @@ class PlannerAgent(BaseAgent):
                     expected_status=404,
                     is_negative_test=True,
                     test_data={},
+                    content_type=endpoint.content_type,
                 )
             )
 
@@ -1304,6 +1312,11 @@ Rules:
 - Use consistent parameter values across related scenarios
 - Do NOT invent status codes not present in the spec responses
 - Do NOT generate scenarios with expected_status 500 or any other 5xx code
+- CRITICAL — setup_dependencies and teardown_dependencies MUST only reference endpoints that
+  actually exist in the OpenAPI specification. Never invent endpoints. For example, if the
+  spec has POST /products/{{productName}} but NOT POST /products, use
+  POST /products/{{productName}} (with a concrete value like "smartphone") in
+  setup_dependencies. Using a non-existent endpoint causes invalid @Before code.
 - The output enhanced_scenarios array MUST contain AT LEAST {scenario_count} entries
 - You MUST include an improved version of every input scenario
 - You MAY add new scenarios beyond the {scenario_count} minimum
@@ -1455,6 +1468,7 @@ Focus on creating realistic, executable test scenarios that follow proper API us
                     test_data=scenario_data.get('test_data', {}),
                     setup_dependencies=scenario_data.get('setup_dependencies', []),
                     teardown_dependencies=scenario_data.get('teardown_dependencies', []),
+                    content_type=scenario_data.get('content_type'),
                 )
                 enhanced_scenarios.append(scenario)
 

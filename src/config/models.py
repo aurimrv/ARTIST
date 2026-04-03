@@ -111,6 +111,7 @@ class TestScenario:
     test_data: Optional[Dict[str, Any]] = None
     setup_dependencies: Optional[List[Dict[str, Any]]] = None
     teardown_dependencies: Optional[List[Dict[str, Any]]] = None
+    content_type: Optional[str] = None
 
 
 @dataclass

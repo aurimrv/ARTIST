@@ -41,6 +41,8 @@ class APIEndpoint:
     # This allows the spec author to provide concrete input sets per expected
     # response code, which the planner uses to generate mandatory test scenarios.
     operation_parameter_examples: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # Inferred Content-Type for the request body based on OpenAPI/Swagger rules
+    content_type: Optional[str] = None
 
 
 @dataclass
@@ -207,7 +209,8 @@ class OpenAPIParser(LoggerMixin):
         base_url = f"{schemes[0]}://{host}{base_path}"
         servers = [{'url': base_url}]
 
-        endpoints = self._parse_paths_swagger_2x(spec_data.get('paths', {}))
+        global_consumes = spec_data.get('consumes', [])
+        endpoints = self._parse_paths_swagger_2x(spec_data.get('paths', {}), global_consumes)
         schemas = self._parse_schemas_swagger_2x(spec_data.get('definitions', {}))
         security_schemes = spec_data.get('securityDefinitions', {})
 
@@ -236,13 +239,13 @@ class OpenAPIParser(LoggerMixin):
                     endpoints.append(endpoint)
         return endpoints
 
-    def _parse_paths_swagger_2x(self, paths: Dict[str, Any]) -> List[APIEndpoint]:
+    def _parse_paths_swagger_2x(self, paths: Dict[str, Any], global_consumes: List[str] = None) -> List[APIEndpoint]:
         """Parse paths from Swagger 2.x specification."""
         endpoints = []
         for path, path_item in paths.items():
             for method, operation in path_item.items():
                 if method.lower() in ['get', 'post', 'put', 'delete', 'patch', 'head', 'options']:
-                    endpoint = self._parse_operation_swagger_2x(path, method.upper(), operation)
+                    endpoint = self._parse_operation_swagger_2x(path, method.upper(), operation, global_consumes)
                     endpoints.append(endpoint)
         return endpoints
 
@@ -263,6 +266,17 @@ class OpenAPIParser(LoggerMixin):
         request_body_examples = self._extract_request_body_examples(request_body)
         operation_parameter_examples = self._extract_operation_parameter_examples(operation)
 
+        # Infer Content-Type for OpenAPI 3.x
+        content_type = None
+        if request_body and 'content' in request_body:
+            content_keys = list(request_body['content'].keys())
+            if content_keys:
+                # Prefer application/json if available, otherwise take the first one
+                if 'application/json' in content_keys:
+                    content_type = 'application/json'
+                else:
+                    content_type = content_keys[0]
+
         return APIEndpoint(
             path=path,
             method=method,
@@ -277,10 +291,11 @@ class OpenAPIParser(LoggerMixin):
             response_examples=response_examples,
             request_body_examples=request_body_examples,
             operation_parameter_examples=operation_parameter_examples,
+            content_type=content_type,
         )
 
     def _parse_operation_swagger_2x(
-        self, path: str, method: str, operation: Dict[str, Any]
+        self, path: str, method: str, operation: Dict[str, Any], global_consumes: List[str] = None
     ) -> APIEndpoint:
         """Parse a single operation from Swagger 2.x."""
         parameters = operation.get('parameters', [])
@@ -289,6 +304,33 @@ class OpenAPIParser(LoggerMixin):
         parameter_examples = self._extract_parameter_examples(parameters)
         response_examples = self._extract_response_examples(responses)
         operation_parameter_examples = self._extract_operation_parameter_examples(operation)
+
+        # Infer Content-Type for Swagger 2.x
+        content_type = None
+        has_form_data = False
+        has_file = False
+        has_body = False
+        
+        for param in parameters:
+            param_in = param.get('in')
+            if param_in == 'formData':
+                has_form_data = True
+                if param.get('type') == 'file':
+                    has_file = True
+            elif param_in == 'body':
+                has_body = True
+                
+        if has_form_data:
+            if has_file:
+                content_type = 'multipart/form-data'
+            else:
+                content_type = 'application/x-www-form-urlencoded'
+        elif has_body:
+            consumes = operation.get('consumes', global_consumes or [])
+            if consumes:
+                content_type = consumes[0]
+            else:
+                content_type = 'application/json'
 
         return APIEndpoint(
             path=path,
@@ -304,6 +346,7 @@ class OpenAPIParser(LoggerMixin):
             response_examples=response_examples,
             request_body_examples=[],
             operation_parameter_examples=operation_parameter_examples,
+            content_type=content_type,
         )
 
     # ------------------------------------------------------------------

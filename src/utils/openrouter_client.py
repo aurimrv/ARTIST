@@ -613,11 +613,11 @@ IMPORTANT: Return ONLY the Java code without any explanations, comments, or mark
 - Output Directory: {project_context.get('output_dir', 'output')}
 
 CRITICAL REQUIREMENTS:
-1. Use JUnit 4 annotations (@Test, @Before, @After, @BeforeClass, @AfterClass)
+1. Use JUnit 4 annotations (@Test, @Before, @After)
 2. Use Rest Assured framework for HTTP requests (import static io.restassured.RestAssured.*)
 3. Java 8 compatibility (no newer Java features like var, lambda expressions in complex scenarios)
-4. Create a comprehensive @Before setupTestData() method with fixtures
-5. Create a comprehensive @After cleanupTestData() method that reliably removes all data created by setupTestData()
+4. Create a comprehensive @Before setupTestData() method with fixtures (DO NOT use @BeforeClass)
+5. Create a comprehensive @After cleanupTestData() method that reliably removes all data created by setupTestData() (DO NOT use @AfterClass)
 6. Ensure cleanupTestData() uses DELETE requests in the correct dependency order (child entities first, then parents)
 7. setupTestData() and cleanupTestData() MUST always be complementary and symmetric: every entity created in setup must be deleted in cleanup, and no entity should be deleted unless it was created in setup.
 8. The setup method MUST populate the database using POST requests with all necessary data
@@ -636,21 +636,23 @@ CRITICAL REQUIREMENTS:
 20. STATUS CODE IMMUTABILITY: Each .statusCode(N) assertion MUST use the exact integer N from the OpenAPI spec. anyOf() is STRICTLY PROHIBITED for status code assertions. Do NOT use anyOf(is(200), is(201)) or any similar construct. Do NOT change a status code even within the same HTTP category (e.g. 400 vs 404, 200 vs 201).
 
 SETUP AND CLEANUP METHOD REQUIREMENTS:
-- Create a @BeforeClass method called setupTestData()
-- Create a @AfterClass method called cleanupTestData()
+- Create a @Before method called setupTestData() (NOT static, NOT @BeforeClass)
+- Create a @After method called cleanupTestData() (NOT static, NOT @AfterClass)
 - MANDATORY FIRST STATEMENT: The VERY FIRST statement in setupTestData() MUST be: RestAssured.baseURI = "{base_url}";
 - MANDATORY LAST STATEMENT: The VERY LAST statement in cleanupTestData() MUST be: RestAssured.reset();
+- DO NOT include any .statusCode() assertions inside setupTestData() or cleanupTestData(). Assume the setup/teardown requests succeed.
 - setupTestData() must always create a consistent set of fixture data that is sufficient for all test scenarios in the class.
 - This includes creating at least one parent entity and all required child entities so that any test can run independently without missing data.
 - setupTestData() must use RestAssured POST endpoints to create fixture data in the correct order (parents before children)
 - CRITICAL: Use ONLY POST endpoints to create data in setupTestData(). NEVER use PUT to create data. If the spec does not have a POST for a resource, do NOT attempt to create it via PUT.
+- CRITICAL: Every endpoint used in setupTestData() and cleanupTestData() MUST appear in the VALID SPEC ENDPOINTS list from the OpenAPI context. NEVER invent endpoints. For example, if the spec has POST /products/{{productName}} but NOT POST /products, call POST /products/smartphone — never POST /products with a JSON body. If a required parent resource has no POST endpoint in the spec, skip creating it and adapt the test accordingly.
 - cleanupTestData() must use RestAssured DELETE endpoints to remove all created data in reverse order (children before parents) without assertions
 - cleanupTestData() must always remove exactly the data created in setupTestData(), in reverse dependency order.
 - setupTestData() and cleanupTestData() must be resilient to empty or missing response bodies.
 - Both setupTestData() and cleanupTestData() must be symmetric: everything created must be deleted, and nothing should be deleted if it was not created in setupTestData().
 - They must use request parameters as fallback identifiers when no response body is returned.
 - Never fail a test due to attempting to parse an empty response.
-- Only @BeforeClass method must validate status codes and ensure operations succeeded
+- DO NOT validate status codes in setupTestData() or cleanupTestData() to avoid test failures during setup/teardown
 - Both methods must handle errors gracefully to avoid test contamination
 - Create entities in the correct order (parent entities before child entities)
 - Use realistic test data that reflects real-world scenarios
@@ -658,7 +660,32 @@ SETUP AND CLEANUP METHOD REQUIREMENTS:
 
 TEST METHOD REQUIREMENTS:
 - Each @Test method should test exactly one scenario
-- CRITICAL: @Test methods MUST NOT create or delete data. All data creation MUST happen in @BeforeClass and all data deletion MUST happen in @AfterClass.
+- CRITICAL: @Test methods MUST NOT create or delete data. All data creation MUST happen in @Before and all data deletion MUST happen in @After.
+- CRITICAL CONTENT-TYPE RULES (apply to every @Test method AND to setupTestData/cleanupTestData):
+  * RULE A — If the scenario's "Content-Type" field is present and non-null, include exactly
+    `.contentType("<value>")` inside given(). Example: Content-Type = "application/x-www-form-urlencoded"
+    → given().contentType("application/x-www-form-urlencoded").formParam(...).when().post(...)
+  * RULE B — If the scenario's "Content-Type" field is absent or null, do NOT add any
+    .contentType() call inside given(). The absence means the endpoint has no request body.
+  * RULE C — GET requests MUST NEVER include .contentType() or .body() inside given(),
+    regardless of the API type, 'produces' field, or any other consideration.
+  * RULE D — Parameters 'in: path', 'in: query', and 'in: header' never produce a request body
+    and never justify adding .contentType() or .body() to given().
+  * RULE E — .contentType() inside .then() (response assertion) is always allowed and is
+    completely independent of rules A–D above.
+  * RULE F — RestAssured API method selection is STRICTLY determined by the Content-Type:
+      Content-Type = "application/x-www-form-urlencoded":
+        - MUST use .formParam("name", "value") for each formData parameter.
+        - MUST NOT use .body("{...}") with JSON. JSON body is a hard error here.
+        - Correct: given().contentType("application/x-www-form-urlencoded").formParam("description", "val").when().post(...)
+        - Wrong:   given().contentType("application/x-www-form-urlencoded").body(jsonBody).when().post(...)
+      Content-Type = "multipart/form-data":
+        - MUST use .multiPart("name", value) for each formData parameter.
+        - MUST NOT use .body("{...}") with JSON.
+      Content-Type = "application/json":
+        - MUST use .body("{...}") with a JSON string.
+        - MUST NOT use .formParam().
+      This rule applies to ALL requests in @Before, @After, and every @Test method.
 - CRITICAL: @Test methods MUST ONLY execute the specific HTTP method and endpoint defined in the scenario. Do NOT add extra POST or DELETE calls inside the @Test method.
 - Use descriptive method names that explain what is being tested
 - Include both positive and negative test cases
@@ -763,20 +790,48 @@ Start directly with the package declaration."""
 - Base URL: {focused_base_url}
 
 REQUIREMENTS:
-1. JUnit 4 annotations (@Test, @Before, @After, @BeforeClass)
+1. JUnit 4 annotations (@Test, @Before, @After)
 2. Rest Assured (import static io.restassured.RestAssured.*)
 3. Java 8 compatibility
-4. @BeforeClass setupTestData() — create all necessary fixture data using POST
+4. @Before setupTestData() — create all necessary fixture data using POST (DO NOT use @BeforeClass)
    - MANDATORY: The VERY FIRST statement MUST be: RestAssured.baseURI = "{focused_base_url}";
    - Use ONLY POST endpoints to create data. NEVER use PUT to create data.
-5. @AfterClass cleanupTestData() — delete all created data in reverse dependency order
+   - CRITICAL: Every endpoint used in setupTestData() and cleanupTestData() MUST appear in the VALID SPEC ENDPOINTS list from the OpenAPI context. NEVER invent endpoints. For example, if the spec has POST /products/{{productName}} but NOT POST /products, call POST /products/smartphone — never POST /products with a JSON body.
+   - DO NOT include any .statusCode() assertions inside setupTestData(). Assume the setup requests succeed.
+5. @After cleanupTestData() — delete all created data in reverse dependency order (DO NOT use @AfterClass)
    - MANDATORY: The VERY LAST statement MUST be: RestAssured.reset();
+   - DO NOT include any .statusCode() assertions inside cleanupTestData(). Assume the teardown requests succeed.
 6. setupTestData() and cleanupTestData() MUST be symmetric: every entity created must be deleted
 7. Each @Test method is independent and uses the pre-created fixture data
 7a. PAY ATTENTION to the "Setup Dependencies" and "Teardown Dependencies" listed in the scenarios to know exactly which POSTs and DELETEs are required for the endpoints being tested.
 8. Each @Test must use @Test(timeout = 60000)
-9. CRITICAL: @Test methods MUST NOT create or delete data. All data creation MUST happen in @BeforeClass and all data deletion MUST happen in @AfterClass.
+9. CRITICAL: @Test methods MUST NOT create or delete data. All data creation MUST happen in @Before and all data deletion MUST happen in @After.
 10. CRITICAL: @Test methods MUST ONLY execute the specific HTTP method and endpoint defined in the scenario. Do NOT add extra POST or DELETE calls inside the @Test method.
+10a. CRITICAL CONTENT-TYPE RULES (apply to every @Test method AND to setupTestData/cleanupTestData):
+    * RULE A — If the scenario's "Content-Type" field is present and non-null, include exactly
+      `.contentType("<value>")` inside given(). Example: Content-Type = "application/x-www-form-urlencoded"
+      → given().contentType("application/x-www-form-urlencoded").formParam(...).when().post(...)
+    * RULE B — If the scenario's "Content-Type" field is absent or null, do NOT add any
+      .contentType() call inside given(). The absence means the endpoint has no request body.
+    * RULE C — GET requests MUST NEVER include .contentType() or .body() inside given(),
+      regardless of the API type, 'produces' field, or any other consideration.
+    * RULE D — Parameters 'in: path', 'in: query', and 'in: header' never produce a request body
+      and never justify adding .contentType() or .body() to given().
+    * RULE E — .contentType() inside .then() (response assertion) is always allowed and is
+      completely independent of rules A–D above.
+    * RULE F — RestAssured API method selection is STRICTLY determined by the Content-Type:
+        Content-Type = "application/x-www-form-urlencoded":
+          - MUST use .formParam("name", "value") for each formData parameter.
+          - MUST NOT use .body("{...}") with JSON. JSON body is a hard error here.
+          - Correct: given().contentType("application/x-www-form-urlencoded").formParam("description", "val").when().post(...)
+          - Wrong:   given().contentType("application/x-www-form-urlencoded").body(jsonBody).when().post(...)
+        Content-Type = "multipart/form-data":
+          - MUST use .multiPart("name", value) for each formData parameter.
+          - MUST NOT use .body("{...}") with JSON.
+        Content-Type = "application/json":
+          - MUST use .body("{...}") with a JSON string.
+          - MUST NOT use .formParam().
+        This rule applies to ALL requests in @Before, @After, and every @Test method.
 11. Validate response body is not null before JsonPath usage (try-catch around JSON parsing)
 12. Generate EXACTLY the scenarios listed — one @Test per scenario, no more
 13. STATUS CODE IMMUTABILITY: Each .statusCode(N) assertion uses the EXACT integer N from the

@@ -9,6 +9,7 @@ from .base_agent import BaseAgent
 from ..config.models import AgentConfig, SystemConfig, TestScenario, ProjectContext
 from ..templates import MavenProjectTemplate
 from ..utils import OpenRouterClient, CodeSanitizer
+from ..utils.http_content_type_fixer import HttpContentTypeFixer
 
 
 class GeneratorAgent(BaseAgent):
@@ -456,6 +457,28 @@ class GeneratorAgent(BaseAgent):
                 # always redefined before each test and RestAssured.reset() is always
                 # called after each test to prevent collateral effects between test sets.
                 test_content = self.code_sanitizer.enforce_restassured_lifecycle(test_content)
+                # Deterministic post-processor: correct Content-Type usage based on the
+                # OpenAPI spec — removes indevido CT, fixes wrong CT type (json→urlencoded),
+                # converts .body(JSON) → .formParam() where the spec requires formData.
+                try:
+                    if hasattr(context, 'api_spec_path') and context.api_spec_path:
+                        import json as _json
+                        _spec_path = context.api_spec_path
+                        if hasattr(_spec_path, 'exists') and _spec_path.exists():
+                            with open(_spec_path, 'r', encoding='utf-8') as _f:
+                                _api_spec = _json.load(_f)
+                            _fixer = HttpContentTypeFixer(_api_spec)
+                            _fixed = _fixer.fix(test_content)
+                            if _fixed != test_content:
+                                self.logger.info(
+                                    f"HttpContentTypeFixer applied corrections to {class_name}"
+                                )
+                            test_content = _fixed
+                except Exception as _e:
+                    self.logger.warning(
+                        f"HttpContentTypeFixer failed for {class_name} — "
+                        f"keeping original: {_e}"
+                    )
             
             # Validate generated content
             if test_content and self._is_valid_java_code(test_content):
@@ -510,12 +533,19 @@ class GeneratorAgent(BaseAgent):
             if scenario.teardown_dependencies:
                 scenarios_text += f"- Teardown Dependencies: {scenario.teardown_dependencies}\n"
 
+            if scenario.content_type:
+                scenarios_text += f"- Content-Type: {scenario.content_type}\n"
+
             scenarios_text += "\n"
 
         scenarios_text += (
             f"FINAL REMINDER: The generated class MUST contain at least {total} @Test methods "
             f"(one per scenario above). Aim for significantly more by exploring boundary values "
             f"and parameter combinations for each endpoint.\n"
+            f"CONTENT-TYPE REMINDER: For every scenario with Content-Type = 'application/x-www-form-urlencoded', "
+            f"use .formParam() — NEVER .body(JSON). For Content-Type = 'application/json', "
+            f"use .body(JSON) — NEVER .formParam(). "
+            f"If Content-Type is absent, add NO .contentType() and NO .body() to given().\n"
         )
 
         return scenarios_text
@@ -564,11 +594,18 @@ class GeneratorAgent(BaseAgent):
             if scenario.teardown_dependencies:
                 scenarios_text += f"- Teardown Dependencies: {scenario.teardown_dependencies}\n"
 
+            if scenario.content_type:
+                scenarios_text += f"- Content-Type: {scenario.content_type}\n"
+
             scenarios_text += "\n"
 
         scenarios_text += (
             f"FINAL REMINDER: Generate exactly {total} @Test methods — one per scenario. "
             f"Do NOT add more. Keep the class concise and complete.\n"
+            f"CONTENT-TYPE REMINDER: For every scenario with Content-Type = 'application/x-www-form-urlencoded', "
+            f"use .formParam() — NEVER .body(JSON). For Content-Type = 'application/json', "
+            f"use .body(JSON) — NEVER .formParam(). "
+            f"If Content-Type is absent, add NO .contentType() and NO .body() to given().\n"
         )
 
         return scenarios_text
@@ -623,6 +660,15 @@ class GeneratorAgent(BaseAgent):
                     
                     # Paths and operations
                     if 'paths' in api_spec:
+                        # Build explicit list of valid spec endpoints
+                        valid_endpoints = []
+                        for _path, _methods in api_spec['paths'].items():
+                            for _method, _op in _methods.items():
+                                if isinstance(_op, dict):
+                                    valid_endpoints.append(f"{_method.upper()} {_path}")
+                        openapi_context += "\nVALID SPEC ENDPOINTS — only these paths exist. Do NOT call any other endpoint in @Before, @After, or @Test:\n"
+                        for _ve in valid_endpoints:
+                            openapi_context += f"  {_ve}\n"
                         openapi_context += "\nAPI Endpoints and Content Type Information:\n"
                         for path, methods in api_spec['paths'].items():
                             openapi_context += f"\nPath: {path}\n"
@@ -723,12 +769,39 @@ class GeneratorAgent(BaseAgent):
                             openapi_context += f"  {schema_name}: {self._format_schema_info(schema)}\n"
                     
                     openapi_context += "\nIMPORTANT CONTENT-TYPE GUIDELINES:\n"
-                    openapi_context += "- Use the correct Content-Type headers for requests based on 'consumes' or 'requestBody.content'\n"
-                    openapi_context += "- Expect the correct Content-Type in responses based on 'produces' or 'responses.content'\n"
-                    openapi_context += "- For JSON APIs, typically use 'application/json' for both request and response\n"
-                    openapi_context += "- For form data, use 'application/x-www-form-urlencoded' or 'multipart/form-data'\n"
-                    openapi_context += "- Always validate response Content-Type matches expected values\n"
-                    openapi_context += "- Do NOT assume fields like 'id' exist unless specified in the response schema\n"
+                    openapi_context += "- RULE 1 — REQUEST Content-Type MUST be derived exclusively from the spec:\n"
+                    openapi_context += "    Swagger 2.0: set .contentType() in given() ONLY if the operation has at least one\n"
+                    openapi_context += "      'in: formData' parameter (use 'application/x-www-form-urlencoded', or\n"
+                    openapi_context += "      'multipart/form-data' if any formData param has type: file) OR an 'in: body'\n"
+                    openapi_context += "      parameter (use the value from 'consumes', defaulting to 'application/json').\n"
+                    openapi_context += "    OpenAPI 3.0: set .contentType() in given() ONLY if the operation has a\n"
+                    openapi_context += "      'requestBody' field. The Content-Type value is the key of the 'content' map\n"
+                    openapi_context += "      (e.g. 'application/json', 'application/x-www-form-urlencoded').\n"
+                    openapi_context += "    If NONE of these conditions are met, do NOT add any .contentType() to given().\n"
+                    openapi_context += "- RULE 2 — Parameters 'in: path', 'in: query', and 'in: header' NEVER produce a\n"
+                    openapi_context += "    request body and NEVER justify adding .contentType() or .body() to given().\n"
+                    openapi_context += "- RULE 3 — GET requests MUST NEVER have .contentType() or .body() in given(),\n"
+                    openapi_context += "    regardless of what 'produces' says. 'produces' governs the RESPONSE only.\n"
+                    openapi_context += "- RULE 4 — The scenario's 'Content-Type' field is the authoritative signal:\n"
+                    openapi_context += "    If the field is present and non-null: use exactly that value in .contentType().\n"
+                    openapi_context += "    If the field is absent or null: do NOT add any .contentType() to given().\n"
+                    openapi_context += "- RULE 5 — RESPONSE Content-Type assertions (.then().contentType(...)) are always\n"
+                    openapi_context += "    independent of the above rules and may be used freely based on 'produces' /\n"
+                    openapi_context += "    'responses[status].content'.\n"
+                    openapi_context += "- RULE 6 — Do NOT assume fields like 'id' exist unless specified in the response schema.\n"
+                    openapi_context += "- RULE 7 — RestAssured API method selection based on Content-Type:\n"
+                    openapi_context += "    When Content-Type = 'application/x-www-form-urlencoded':\n"
+                    openapi_context += "      → Use .formParam(\"name\", \"value\") for each 'in: formData' parameter.\n"
+                    openapi_context += "      → NEVER use .body(\"{...}\") with a JSON string.\n"
+                    openapi_context += "      → Example: given().contentType(\"application/x-www-form-urlencoded\")\n"
+                    openapi_context += "                        .formParam(\"description\", \"value\").when().post(...)\n"
+                    openapi_context += "    When Content-Type = 'multipart/form-data':\n"
+                    openapi_context += "      → Use .multiPart(\"name\", value) for each 'in: formData' parameter.\n"
+                    openapi_context += "      → NEVER use .body(\"{...}\") with a JSON string.\n"
+                    openapi_context += "    When Content-Type = 'application/json':\n"
+                    openapi_context += "      → Use .body(\"{...}\") with a JSON string.\n"
+                    openapi_context += "      → NEVER use .formParam().\n"
+                    openapi_context += "    This rule applies to ALL requests in @Before, @After, and @Test methods.\n"
                     openapi_context += "\nIMPORTANT EXAMPLES USAGE GUIDELINES:\n"
                     openapi_context += "- When a parameter has [examples: ...] listed above, USE those exact values in your test methods.\n"
                     openapi_context += "- When multiple example values are listed for a parameter, create separate @Test methods\n"
