@@ -209,3 +209,6 @@ __marimo__/
 .idea/
 examples/
 output/
+output.txt
+run_generator.sh
+run_generator_readme
