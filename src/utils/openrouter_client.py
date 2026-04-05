@@ -695,6 +695,7 @@ TEST METHOD REQUIREMENTS:
 - Handle authentication if required by the API
 
 IMPORTS REQUIRED:
+- import io.restassured.RestAssured;
 - import static io.restassured.RestAssured.*;
 - import static org.hamcrest.Matchers.*;
 - import static org.junit.Assert.*;
@@ -840,6 +841,7 @@ REQUIREMENTS:
     entirely. Do NOT generate a @Test for it. Do NOT add @Ignore. Just omit it.
 
 IMPORTS REQUIRED:
+- import io.restassured.RestAssured;
 - import static io.restassured.RestAssured.*;
 - import static org.hamcrest.Matchers.*;
 - import static org.junit.Assert.*;
