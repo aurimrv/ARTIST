@@ -58,7 +58,7 @@ class MavenProjectTemplate(LoggerMixin):
         <jackson.version>2.13.4</jackson.version>
         <slf4j.version>1.7.36</slf4j.version>
         <logback.version>1.2.12</logback.version>
-        <jersey.version>2.40</jersey.version>
+        <jersey.version>2.25.1</jersey.version>
         <mockito.version>5.11.0</mockito.version>
 
         <!-- Plugin versions -->
@@ -125,12 +125,6 @@ class MavenProjectTemplate(LoggerMixin):
                     <artifactId>*</artifactId>
                 </exclusion>
             </exclusions>
-        </dependency>
-        <dependency>
-            <groupId>org.glassfish.jersey.inject</groupId>
-            <artifactId>jersey-hk2</artifactId>
-            <version>${jersey.version}</version>
-            <scope>test</scope>
         </dependency>
 
         <!-- Mockito (for *500Test.java MockedStatic) -->
