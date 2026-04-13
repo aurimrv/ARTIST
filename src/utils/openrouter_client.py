@@ -1168,10 +1168,21 @@ Generate the class following the MANDATORY STRATEGY from the system message:
    return new ResourceConfig(InnerClass1.class, InnerClass2.class, ...);
    DO NOT register any real resource class from the API implementation.
 
-3. For each endpoint, generate one @Test method:
-   - Calls the endpoint via target(path).request().get(Response.class) (Jersey 2.x).
-   - Asserts assertEquals(500, response.getStatus()).
-   - NEVER uses resource().path(...) — that is Jersey 1.x.
+3. For each endpoint, generate one @Test method that calls the endpoint and asserts
+   assertEquals(500, response.getStatus()). Use the correct Jersey 2.x call for each
+   HTTP method — the rules below are MANDATORY and must never be violated:
+
+   GET    → target(path).request().get(Response.class)
+   DELETE → target(path).request().delete(Response.class)
+   POST   → target(path).request().post(null, Response.class)
+   PUT    → target(path).request().put(javax.ws.rs.client.Entity.text(""), Response.class)
+            CRITICAL: PUT requires a non-null Entity. Passing null throws
+            IllegalStateException at runtime. ALWAYS use Entity.text("") as the
+            body — never null — for PUT requests.
+   PATCH  → target(path).request().method("PATCH",
+                javax.ws.rs.client.Entity.text(""), Response.class)
+
+   NEVER uses resource().path(...) — that is Jersey 1.x.
 
 4. PATH CONSTRUCTION: Build the target path from the OpenAPI spec path.
    Example: for endpoint path "/v2/lang/{{lang}}", use target("/v2/lang/en").

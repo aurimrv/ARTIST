@@ -252,6 +252,19 @@ class MavenProjectTemplate(LoggerMixin):
                     <systemPropertyVariables>
                         <api.base.url>{{ base_url }}</api.base.url>
                     </systemPropertyVariables>
+{% if api_impl_jar_name %}
+                    <!--
+                        Exclude the SUT JAR from Surefire runtime classpath.
+                        The 500Test classes define their own stub JAX-RS resources
+                        and do not reference any SUT class. Without this, Spring Boot
+                        embedded in JAX-RS SUT JARs (e.g. features-service-impl.jar)
+                        attempts to initialise and fails with applicationContext.xml
+                        not found. Only emitted when api-impl JAR is provided.
+                    -->
+                    <classpathDependencyExcludes>
+                        <classpathDependencyExclude>com.example:api-impl</classpathDependencyExclude>
+                    </classpathDependencyExcludes>
+{% endif %}
                 </configuration>
             </plugin>
 
