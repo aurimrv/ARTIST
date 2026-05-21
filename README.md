@@ -1,4 +1,4 @@
-# ARTIST — Automated REST Testing Intelligent Specification-based Tool
+# ARTIST (Automated REST Testing Intelligent Specification-based Tool)
 
 **ARTIST** is an LLM-based (Large Language Model) multi-agent tool that automatically
 **generates, compiles, and iteratively corrects** Java integration tests
@@ -6,8 +6,8 @@
 
 The system uses a multi-agent architecture to plan test scenarios from the
 specification contract, synthesize the Java source code, build the Maven project,
-and iteratively repair compilation and execution failures. Tests whose documented
-behavior the API does not honor are not silently dropped: they are annotated with
+and iteratively repair failures in compilation and execution. Tests whose documented
+behavior that the API does not honor is not silently dropped: they are annotated with
 `@Ignore` plus a structured rationale, preserving full traceability to the OpenAPI
 contract.
 
