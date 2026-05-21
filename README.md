@@ -1,98 +1,193 @@
-# API Test Generator System
+# ARTIST — Automated REST Testing Intelligent Specification-based Tool
 
-O **API Test Generator System** é uma ferramenta baseada em agentes LLM (Large Language Models) projetada para gerar, compilar e corrigir automaticamente testes de integração em Java (JUnit 4 + RestAssured) a partir de especificações OpenAPI (Swagger).
+**ARTIST** is an LLM-based (Large Language Model) multi-agent tool that automatically
+**generates, compiles, and iteratively corrects** Java integration tests
+(JUnit + RestAssured) from OpenAPI (Swagger) specifications.
 
-O sistema utiliza uma arquitetura multi-agente para planejar cenários de teste, gerar o código-fonte, compilar o projeto Maven e corrigir iterativamente falhas de compilação e execução.
+The system uses a multi-agent architecture to plan test scenarios from the
+specification contract, synthesize the Java source code, build the Maven project,
+and iteratively repair compilation and execution failures. Tests whose documented
+behavior the API does not honor are not silently dropped: they are annotated with
+`@Ignore` plus a structured rationale, preserving full traceability to the OpenAPI
+contract.
 
-## Funcionalidades Principais
+---
 
-- **Geração Baseada em OpenAPI**: Lê arquivos YAML/JSON e extrai endpoints, parâmetros, schemas e exemplos (`x-parameter-examples`).
-- **Arquitetura Multi-Agente**:
-  - `PlannerAgent`: Analisa a especificação e gera cenários de teste positivos e negativos.
-  - `GeneratorAgent`: Converte os cenários em código Java (JUnit 4 + RestAssured).
-  - `CompilerCorrectorAgent`: Tenta compilar o projeto Maven e corrige erros de sintaxe/importação.
-  - `TestCorrectorAgent`: Executa os testes e corrige falhas de asserção iterativamente.
-- **Testes de Erro 500 (Jersey + Mockito)**: Suporte avançado para simulação de erros internos do servidor usando o padrão de Recurso Substituto (Substitute Resource Pattern).
-- **Isolamento de Estado**: Garantia de que cada teste redefine a `baseURI` e limpa o estado do RestAssured (`RestAssured.reset()`) para evitar efeitos colaterais.
-- **Determinismo e Reprodutibilidade**: Suporte a configuração de *seed* global e por agente para saídas de LLM consistentes.
+## Main Features
 
-## Pré-requisitos
+- **Specification-driven generation**: reads YAML/JSON documents (Swagger 2.0 or
+  OpenAPI 3.0) and extracts endpoints, parameters, schemas, response codes, and
+  parameter examples (`x-parameter-examples`).
+- **Multi-agent architecture** coordinated by a `CoordinatorAgent`:
+  - `PlannerAgent`: analyses the specification (and optional source code) and
+    generates positive and negative test scenarios, deduplicating them and saving
+    auditable snapshots.
+  - `GeneratorAgent`: turns scenarios into Java code (JUnit + RestAssured),
+    anchored on reusable templates.
+  - `CompilerCorrectorAgent`: builds the Maven project and iteratively repairs
+    compilation/import errors via the LLM.
+  - `TestCorrectorAgent`: runs the tests and iteratively repairs runtime failures,
+    falling back to `@Ignore` for irreconcilable specification/implementation
+    divergences.
+- **Split-by-endpoint workflow (default)**: each endpoint group is generated,
+  compiled, and executed as an isolated unit, so a single failing group never
+  aborts the whole run (the offending file is renamed to `.java.err`).
+- **Dedicated HTTP 500 testing (Jersey + Mockito)**: when an implementation JAR is
+  provided via `--api-impl`, ARTIST synthesizes `*Test500.java` classes using the
+  Jersey Test Framework with Mockito (Substitute Resource Pattern) to deterministically
+  trigger documented HTTP 500 responses.
+- **State isolation**: each generated test class resets `RestAssured.baseURI` and
+  calls `RestAssured.reset()` in `@BeforeClass`/`@AfterClass`, avoiding cross-class
+  side effects when several test classes share a JVM.
+- **Heterogeneous per-agent LLM configuration**: model, temperature, seed, and
+  token limits are configurable independently for each agent through `.env`.
+- **Determinism and reproducibility**: global and per-agent seed support for
+  consistent LLM outputs; every LLM call is logged with prompts, responses, token
+  counts, and cost.
 
-- Python 3.9+
-- Java JDK 8 ou superior (configurado no `JAVA_HOME`)
-- Apache Maven 3.6+ (configurado no `MAVEN_HOME` ou no `PATH`)
-- Chave de API do OpenRouter (para acesso aos modelos LLM)
+---
 
-## Instalação
+## Prerequisites
 
-1. Clone o repositório.
-2. Instale as dependências Python:
+- Python 3.8+
+- Java JDK 8 or higher (configured in `JAVA_HOME`)
+- Apache Maven 3.6+ (configured in `MAVEN_HOME` or on the `PATH`)
+- An OpenRouter API key (for LLM model access)
+
+---
+
+## Installation
+
+1. Clone the repository.
+2. Install the Python dependencies:
    ```bash
    pip install -r requirements.txt
    ```
-3. Copie o arquivo de configuração de exemplo e preencha sua chave de API:
+3. Copy the example configuration file and fill in your API key:
    ```bash
    cp .env.example .env
    ```
 
-## Uso Básico
+---
 
-O comando principal é o `generate`, que requer pelo menos a especificação da API e o diretório de saída:
+## Basic Usage
+
+The main command is `generate`, which requires at least the API specification and
+the output directory:
 
 ```bash
 python main.py generate --api-spec swagger.yaml --output ./reports/
 ```
 
-### Estrutura de Saída
+ARTIST supports two operating modes:
 
-Para cada execução, o sistema cria um diretório com timestamp dentro do diretório de saída especificado:
+- **Specification-only** (`ARTIST-spec`): only the OpenAPI document is required.
+  ```bash
+  python main.py generate \
+    --api-spec swagger.yaml \
+    --output ./reports/ \
+    --seed 42
+  ```
+- **Specification + implementation** (`ARTIST-spec-impl`): the optional `--api-src`
+  and `--api-impl` flags add implementation-level context (and enable HTTP 500
+  tests).
+  ```bash
+  python main.py generate \
+    --api-spec swagger.yaml \
+    --api-src  path/to/api/src \
+    --api-impl path/to/api-impl.jar \
+    --output ./reports/ \
+    --seed 42
+  ```
+
+### Output Structure
+
+For each run, the system creates a timestamped directory inside the specified
+output directory:
 
 ```text
 reports/
 └── generated-tests_YYYY-MM-DD_HH-MM-SS/
-    ├── maven-project/               # Projeto Java gerado completo (pom.xml, src/)
-    └── llm_interactions/            # Logs e snapshots de debug dos agentes LLM
+    ├── maven-project/               # Complete generated Java project (pom.xml, src/)
+    │   ├── pom.xml
+    │   └── src/test/java/...        # Generated *Test.java (and *Test500.java) classes
+    └── llm_interactions/            # Debug logs and snapshots from the LLM agents
         ├── ..._scenarios_1_raw.json
         ├── ..._scenarios_2_deduplicated.json
-        └── ..._scenarios_3_llm_enhanced.json
+        ├── ..._scenarios_3_llm_enhanced.json
+        └── ..._cost.json            # Per-call token usage and cost
 ```
 
-## Parâmetros de Linha de Comando (CLI)
+---
 
-| Parâmetro | Descrição | Obrigatório | Padrão |
+## Command-Line Parameters (CLI)
+
+| Parameter | Description | Required | Default |
 |---|---|---|---|
-| `--api-spec` | Caminho para o arquivo OpenAPI (YAML/JSON). | Sim | - |
-| `--output`, `-o` | Diretório base para a saída gerada. | Sim | - |
-| `--api-src` | Caminho para o código-fonte da API (para análise extra). | Não | - |
-| `--base-url` | URL base para os testes RestAssured. | Não | `http://localhost:8080` |
-| `--package` | Nome do pacote Java para os testes gerados. | Não | Auto-detectado |
-| `--class-name` | Nome da classe de teste principal. | Não | `ApiIntegrationTest` |
-| `--api-impl` | Caminho para o JAR de implementação da API. Necessário para gerar testes de erro 500 (Mockito/Jersey). | Não | - |
-| `--seed` | Seed global para tornar as saídas do LLM determinísticas. | Não | - |
-| `--skip-compilation` | Pula as fases de compilação e correção de erros. | Não | `False` |
-| `--skip-test-run` | Pula as fases de execução de testes e correção de falhas. | Não | `False` |
+| `--api-spec` | Path to the OpenAPI file (YAML/JSON). | Yes | - |
+| `--output`, `-o` | Base directory for the generated output. | Yes | - |
+| `--api-src` | Path to the API source code directory (Java Maven project) for complementary static analysis. | No | - |
+| `--base-url` | Base URL for the RestAssured tests. | No | `http://localhost:8080` |
+| `--package` | Java package name for the generated tests. | No | Auto-detected |
+| `--class-name` | Name of the main test class. | No | `ApiIntegrationTest` |
+| `--api-impl` | Path to the API implementation JAR. Required to generate HTTP 500 tests (Mockito/Jersey); copied into `src/test/resources/` and referenced in `pom.xml` as a system-scoped dependency. | No | - |
+| `--seed` | Global seed to make LLM outputs deterministic (overrides `SEED` in `.env`; per-agent seeds still take precedence). | No | - |
+| `--skip-compilation` | Skip the compilation and error-correction phases. | No | `False` |
+| `--skip-test-run` | Skip the test-execution and failure-correction phases. | No | `False` |
+| `--config`, `-c` | Path to a custom `.env` configuration file. | No | `.env` |
+| `--verbose`, `-v` | Enable verbose logging. | No | `False` |
+| `--quiet`, `-q` | Suppress non-essential logging. | No | `False` |
 
-## Configuração de Determinismo (Seed)
+Two additional subcommands are available: `validate` (checks system integration
+and configuration, optionally saving a report with `--report`) and `version`
+(shows version information).
 
-Para garantir que a geração de testes seja reprodutível entre diferentes execuções, você pode configurar o parâmetro `seed`. A precedência de configuração é a seguinte (do mais forte para o mais fraco):
+---
 
-1. **Seed Específico por Agente (`.env`)**: Variáveis como `PLANNER_SEED=42`, `GENERATOR_SEED=99` no arquivo `.env` têm a precedência máxima.
-2. **Seed Global via CLI (`--seed`)**: O parâmetro `--seed 42` na linha de comando sobrescreve o seed global do `.env`, mas respeita os seeds específicos de agentes.
-3. **Seed Global (`.env`)**: A variável `SEED=42` no arquivo `.env` atua como fallback para todos os agentes que não possuem um seed específico.
+## Determinism Configuration (Seed)
 
-**Exemplo de uso via CLI:**
+To make test generation reproducible across runs, configure the `seed`. The
+configuration precedence is as follows (strongest to weakest):
+
+1. **Per-agent seed (`.env`)**: variables such as `PLANNER_SEED=42` or
+   `GENERATOR_SEED=99` take the highest precedence.
+2. **Global seed via CLI (`--seed`)**: `--seed 42` overrides the global `SEED` in
+   `.env`, but respects per-agent seeds.
+3. **Global seed (`.env`)**: `SEED=42` acts as a fallback for all agents that do
+   not define a specific seed.
+
+**Example:**
 ```bash
 python main.py generate --api-spec api.yaml --output tests/ --seed 42
 ```
 
-## Variáveis de Ambiente (`.env`)
+---
 
-O arquivo `.env` permite configurar o comportamento detalhado do sistema:
+## Environment Variables (`.env`)
 
-- **Autenticação**: `OPENROUTER_API_KEY`, `OPENROUTER_API_BASE`
-- **Modelos LLM**: `OPENROUTER_DEFAULT_MODEL`, `PLANNER_MODEL`, `GENERATOR_MODEL`, etc.
-- **Limites e Retentativas**: `RATE_LIMIT_REQUESTS_PER_MINUTE`, `RETRY_ATTEMPTS`, `MAX_GENERATION_ATTEMPTS`
-- **Determinismo**: `SEED`, `PLANNER_SEED`, `TEMPERATURE`, etc.
-- **Ambiente Java**: `JAVA_HOME`, `MAVEN_HOME`
+The `.env` file configures the detailed behavior of the system:
 
-Consulte o arquivo `.env.example` para ver todas as opções disponíveis e seus valores padrão.
+- **Authentication**: `OPENROUTER_API_KEY`, `OPENROUTER_API_BASE`
+- **LLM models (per agent)**: `OPENROUTER_DEFAULT_MODEL`, `PLANNER_MODEL`,
+  `GENERATOR_MODEL`, `COMPILER_CORRECTOR_MODEL`, `TEST_CORRECTOR_MODEL`
+- **Rate limiting / retries**: `RATE_LIMIT_REQUESTS_PER_MINUTE`,
+  `RATE_LIMIT_TOKENS_PER_MINUTE`, `RETRY_ATTEMPTS`, `RETRY_DELAY`, `BACKOFF_FACTOR`
+- **Correction budgets**: `MAX_GENERATION_ATTEMPTS`,
+  `MAX_COMPILE_CORRECTION_ATTEMPTS`, `MAX_TEST_CORRECTION_ATTEMPTS`
+- **Determinism**: `SEED`, `PLANNER_SEED`, `TEMPERATURE`, `PLANNER_TEMPERATURE`,
+  etc.
+- **Workflow**: `SPLIT_BY_ENDPOINT` (one Java class per endpoint group; default
+  `true`)
+- **Java/Maven environment**: `JAVA_HOME`, `MAVEN_HOME`, `MAVEN_TIMEOUT`,
+  `MAVEN_MEMORY`, `JAVA_VALIDATION_ENABLED`
+- **Logging**: `LOG_LEVEL`
+
+See `.env.example` for all available options and their default values, and
+`docs/project_structure.md` for the full technical documentation.
+
+---
+
+## License
+
+This project is distributed under the terms of the `LICENSE` file included in the
+repository.

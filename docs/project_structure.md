@@ -1,430 +1,300 @@
-# Sistema Multi-Agente para Geração de Testes de API
+# ARTIST — Automated REST Testing Intelligent Specification-based Tool
 
-## Documentação Técnica Completa
+## Complete Technical Documentation
 
-**Versão:** 1.0.0  
-**Data:** 29 de Agosto de 2025  
-**Autor:** Sistema de Geração Automática de Testes de API  
-
----
-
-## Índice
-
-1. [Visão Geral](#visão-geral)
-2. [Arquitetura do Sistema](#arquitetura-do-sistema)
-3. [Agentes e Responsabilidades](#agentes-e-responsabilidades)
-4. [Fluxo de Execução](#fluxo-de-execução)
-5. [Estruturas de Dados](#estruturas-de-dados)
-6. [Uso de LLM](#uso-de-llm)
-7. [Parsers e Utilitários](#parsers-e-utilitários)
-8. [Templates e Geração de Código](#templates-e-geração-de-código)
-9. [Configuração e Deployment](#configuração-e-deployment)
-10. [Exemplos de Uso](#exemplos-de-uso)
+**Tool:** ARTIST (Automated REST Testing Intelligent Specification-based Tool)
+**Type:** LLM-based multi-agent system for REST API integration test generation
 
 ---
 
-## Visão Geral
+## Table of Contents
 
-O Sistema Multi-Agente para Geração de Testes de API é uma solução automatizada que analisa especificações OpenAPI e código fonte Java para gerar testes de integração completos e funcionais. O sistema utiliza uma arquitetura baseada em agentes especializados que trabalham em conjunto para produzir código Java válido usando JUnit 4 e Rest Assured.
-
-### Características Principais
-
-- **Arquitetura Multi-Agente**: 5 agentes especializados trabalhando em pipeline
-- **Análise Dupla**: Especificação OpenAPI + código fonte Java
-- **Geração Inteligente**: Templates robustos + enhancement via LLM
-- **Correção Automática**: Detecção e correção de erros de compilação e teste
-- **Deduplicação**: Remoção automática de cenários duplicados
-- **Exportação JSON**: Cenários conformes a schemas definidos
+1. [Overview](#overview)
+2. [System Architecture](#system-architecture)
+3. [Agents and Responsibilities](#agents-and-responsibilities)
+4. [Execution Flow](#execution-flow)
+5. [Data Structures](#data-structures)
+6. [LLM Usage](#llm-usage)
+7. [Parsers and Utilities](#parsers-and-utilities)
+8. [Templates and Code Generation](#templates-and-code-generation)
+9. [Configuration and Deployment](#configuration-and-deployment)
+10. [Usage Examples](#usage-examples)
 
 ---
 
-## Arquitetura do Sistema
+## Overview
 
-### Diagrama de Arquitetura
+ARTIST is an automated tool that analyses OpenAPI specifications (and, optionally,
+the Java source code and implementation JAR of the API) to generate complete,
+runnable integration tests. It is built around specialized agents that cooperate to
+produce valid Java code using JUnit and RestAssured, compiling and iteratively
+repairing the generated suite through an LLM accessed via the OpenRouter API.
+
+A defining principle of ARTIST is that the OpenAPI document is the single source of
+truth for oracle derivation. When a generated test cannot be reconciled with the
+actual API behavior, it is not deleted: it is annotated with `@Ignore` plus a
+structured rationale, keeping the test as an auditable record of a
+specification/implementation divergence.
+
+### Main Characteristics
+
+- **Multi-agent architecture**: a `CoordinatorAgent` orchestrating four
+  task-specific agents working as a pipeline.
+- **Dual analysis**: OpenAPI specification + optional Java source code/implementation
+  JAR.
+- **Template-anchored generation**: robust code templates constrain the LLM output
+  to syntactically consistent Java structures.
+- **Iterative self-correction**: automatic detection and repair of compilation and
+  test failures, bounded by per-phase retry budgets.
+- **Split-by-endpoint workflow**: each endpoint group is generated, compiled, and
+  executed in isolation, so a single failing group does not abort the whole run.
+- **Dedicated HTTP 500 testing**: optional Jersey + Mockito branch for documented
+  server-error responses.
+- **Deduplication and auditability**: duplicate scenarios are removed and every
+  pipeline stage is persisted as an inspectable JSON snapshot.
+
+---
+
+## System Architecture
+
+ARTIST is organized in four layers that operate in sequence: **Inputs**,
+**Multi-Agent Pipeline**, **External Services**, and **Outputs**.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    COORDINATOR AGENT                           │
-│                  (Orquestração Central)                        │
-└─────────────────────┬───────────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     PIPELINE DE AGENTES                        │
-│                                                                 │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
-│  │   PLANNER   │  │ GENERATOR   │  │ COMPILER    │             │
-│  │   AGENT     │─▶│   AGENT     │─▶│ CORRECTOR   │             │
-│  │             │  │             │  │   AGENT     │             │
-│  └─────────────┘  └─────────────┘  └─────────────┘             │
-│                                           │                     │
-│                                           ▼                     │
-│                    ┌─────────────┐  ┌─────────────┐             │
-│                    │    TEST     │  │ INTEGRATION │             │
-│                    │ CORRECTOR   │─▶│ VALIDATOR   │             │
-│                    │   AGENT     │  │             │             │
-│                    └─────────────┘  └─────────────┘             │
-└─────────────────────────────────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                  COMPONENTES DE APOIO                          │
-│                                                                 │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
-│  │   OPENAPI   │  │    JAVA     │  │   MAVEN     │             │
-│  │   PARSER    │  │   PARSER    │  │   PARSER    │             │
-│  └─────────────┘  └─────────────┘  └─────────────┘             │
-│                                                                 │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
-│  │   JUNIT     │  │   MAVEN     │  │ OPENROUTER  │             │
-│  │  TEMPLATE   │  │  TEMPLATE   │  │   CLIENT    │             │
-│  └─────────────┘  └─────────────┘  └─────────────┘             │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                              INPUTS                                │
+│   OpenAPI spec (required) · Java source (opt.) · api-impl.jar (opt)│
+│   CLI & Configuration: main.py · Settings · .env → ProjectContext  │
+└─────────────────────────────┬──────────────────────────────────────┘
+                              │  ProjectContext
+                              ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                       MULTI-AGENT PIPELINE                         │
+│                                                                    │
+│              ┌──────────────────────────────────┐                 │
+│              │         CoordinatorAgent          │                 │
+│              │  lifecycle · split-by-endpoint ·  │                 │
+│              │  5xx filtering · GenerationResult │                 │
+│              └──────────────────┬───────────────┘                 │
+│                                 ▼                                  │
+│   Phase 1 Planning   → PlannerAgent      (+ OpenAPI/Java/Maven parsers)
+│   Phase 2 Generation → GeneratorAgent    (+ templates, sanitizers) │
+│   Phase 3 Compile fix→ CompilerCorrectorAgent (+ MavenRunner)      │
+│   Phase 4 Test fix   → TestCorrectorAgent (+ MavenRunner, versioning)
+│   Phase 5 HTTP 500   → GeneratorAgent     (Jersey + Mockito, optional)
+│                                                                    │
+│   Shared utilities: OpenRouterClient · RateLimiter · CodeSanitizer │
+│   HttpContentTypeFixer · IntegrationValidator · TestVersionManager │
+└─────────────────────────────┬──────────────────────────────────────┘
+                              ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                        EXTERNAL SERVICES                           │
+│   OpenRouter API (Claude/GPT/Kimi/Gemini) · Apache Maven + JDK 8+  │
+│   Surefire (JUnit) · Jersey Test Framework + Mockito (HTTP 500)    │
+└─────────────────────────────┬──────────────────────────────────────┘
+                              ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                             OUTPUTS                                │
+│   generated-tests_<timestamp>/                                     │
+│     ├── maven-project/      (pom.xml, src/test/java/**)            │
+│     ├── llm_interactions/   (snapshots + *_cost.json)             │
+│     └── GenerationResult    (scenarios, files, @Ignore, costs)     │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-### Camadas da Arquitetura
+### Architecture Layers
 
-1. **Camada de Orquestração**: CoordinatorAgent
-2. **Camada de Processamento**: Agentes especializados (Planner, Generator, Correctors)
-3. **Camada de Análise**: Parsers (OpenAPI, Java, Maven)
-4. **Camada de Geração**: Templates (JUnit, Maven, Rest Assured)
-5. **Camada de Integração**: OpenRouter Client, Rate Limiter, Validators
+1. **Inputs**: collects and prepares the user-supplied data (OpenAPI spec, optional
+   Java source, optional implementation JAR) and the CLI/configuration
+   (`main.py`, `Settings`, `.env`), assembling a typed `ProjectContext` that is
+   handed to the `CoordinatorAgent`.
+2. **Multi-Agent Pipeline**: the `CoordinatorAgent` plus the four task agents, the
+   parsers, the templates, and the cross-cutting utility components.
+3. **External Services**: the OpenRouter API (uniform access to multiple LLM
+   providers) and an Apache Maven + JDK 8+ installation (Surefire for JUnit;
+   Jersey Test Framework + Mockito for HTTP 500 scenarios).
+4. **Outputs**: the timestamped `generated-tests_<...>/` directory holding the
+   Maven project, the LLM interaction snapshots, and the consolidated
+   `GenerationResult`.
 
 ---
 
-## Agentes e Responsabilidades
+## Agents and Responsibilities
 
 ### 1. CoordinatorAgent
 
-**Responsabilidade**: Orquestração central do pipeline de geração de testes
+**Responsibility**: Central orchestration of the test-generation pipeline.
 
-**Funcionalidades**:
-- Inicialização e coordenação de todos os agentes
-- Controle do fluxo de execução em 5 fases
-- Gerenciamento de tentativas e recuperação de erros
-- Validação final do processo
+**Functionality**:
+- Instantiates and coordinates all task agents on demand.
+- Propagates the run-specific output directory so every LLM interaction snapshot is
+  written next to the generated Maven project.
+- Filters out 5xx scenarios from regular generation (they are handled in Phase 5).
+- Drives either the split-by-endpoint workflow (default) or the legacy
+  generate-all/compile-all/run-all workflow.
+- Aggregates per-class outcomes into a single `GenerationResult`.
 
-**Estruturas de Entrada**:
+**Input structure**:
 ```python
 ProjectContext:
-  - api_spec_path: str
-  - api_src_path: Optional[str]
-  - output_path: str
   - base_url: str
+  - api_src_path: Optional[Path]
   - package_name: str
   - main_test_class_name: str
+  - split_by_endpoint: bool = True
+  - api_impl_path: Optional[Path] = None      # --api-impl JAR
+  - generated_test_dir: Optional[Path] = None
+  - maven_project_dir: Optional[Path] = None
 ```
 
-**Estruturas de Saída**:
+**Output structure**:
 ```python
 GenerationResult:
   - success: bool
-  - output_path: str
-  - maven_project_path: str
-  - test_files: List[str]
-  - scenarios_count: int
-  - errors: List[str]
+  - message: str
+  - generated_files: list[Path]
+  - compilation_errors: list[str]
+  - test_failures: list[str]
+  - ignored_tests: list[str]
 ```
 
-**Uso de LLM**: ❌ Não utiliza LLM diretamente
+**LLM usage**: ❌ Does not call the LLM directly.
 
 ### 2. PlannerAgent
 
-**Responsabilidade**: Análise de API e criação de cenários de teste
+**Responsibility**: API analysis and test-scenario creation.
 
-**Funcionalidades**:
-- Parsing de especificações OpenAPI/Swagger
-- Análise de código fonte Java (opcional)
-- Extração de endpoints REST
-- Geração de cenários de teste realistas
-- Deduplicação de cenários
-- Exportação para JSON
+**Functionality**:
+- Parses OpenAPI/Swagger specifications (Swagger 2.0 and OpenAPI 3.0).
+- Optionally analyses Java source code for implementation context.
+- Generates positive and negative `TestScenario` records from the documented
+  contract.
+- Honours operation-level `x-parameter-examples` when present.
+- Deduplicates scenarios.
+- Persists three auditable JSON snapshots: `1_raw`, `2_deduplicated`, and
+  `3_llm_enhanced`.
 
-**Estruturas de Entrada**:
-```python
-# Especificação OpenAPI
-OpenAPISpec:
-  - version: str
-  - info: Dict[str, Any]
-  - servers: List[Server]
-  - paths: Dict[str, PathItem]
-  - components: Dict[str, Any]
-
-# Código fonte Java (opcional)
-JavaProject:
-  - classes: List[JavaClass]
-  - endpoints: List[RestEndpoint]
-  - maven_info: MavenProject
-```
-
-**Estruturas de Saída**:
+**Output structure**:
 ```python
 TestScenario:
   - name: str
   - description: str
-  - method: str  # GET, POST, PUT, DELETE
   - endpoint: str
+  - method: str                 # GET, POST, PUT, DELETE, ...
+  - parameters: Dict[str, Any]
   - expected_status: int
-  - test_data: Optional[Dict[str, Any]]
-  - path_parameters: Dict[str, Any]
-  - query_parameters: Dict[str, Any]
-  - headers: Dict[str, str]
   - expected_response_schema: Optional[Dict[str, Any]]
   - is_negative_test: bool
-  - from_source_code: bool
+  - test_data: Optional[Dict[str, Any]]
+  - setup_dependencies: Optional[List[Dict[str, Any]]]
+  - teardown_dependencies: Optional[List[Dict[str, Any]]]
+  - content_type: Optional[str]
 ```
 
-**Uso de LLM**: ✅ Utiliza LLM para enriquecimento de cenários
-
-**Interações LLM**:
-- Análise de endpoints para geração de cenários realistas
-- Criação de dados de teste apropriados
-- Geração de descrições de cenários
+**LLM usage**: ✅ Uses the LLM to enrich scenarios (snapshot `3_llm_enhanced`).
 
 ### 3. GeneratorAgent
 
-**Responsabilidade**: Geração de código Java de teste
+**Responsibility**: Java test-code generation.
 
-**Funcionalidades**:
-- Criação de estrutura Maven
-- Geração de classes de teste JUnit 4
-- Integração com Rest Assured
-- Enhancement opcional via LLM
-- Validação de código gerado
+**Functionality**:
+- Creates the Maven project structure (via `MavenProjectTemplate`).
+- Groups scenarios by endpoint and generates one self-contained JUnit class per
+  group, anchored on the templates.
+- Fills in test bodies through the LLM and cleans the output (`CodeSanitizer`,
+  `HttpContentTypeFixer`).
+- Generates the dedicated `*Test500.java` classes (Jersey + Mockito) in Phase 5
+  when an implementation JAR is supplied.
 
-**Estruturas de Entrada**:
-```python
-# Lista de cenários de teste
-scenarios: List[TestScenario]
-
-# Contexto do projeto
-ProjectContext:
-  - package_name: str
-  - main_test_class_name: str
-  - base_url: str
-  - output_path: str
-```
-
-**Estruturas de Saída**:
-```python
-# Arquivos Java gerados
-TestClass:
-  - file_path: str
-  - class_name: str
-  - package_name: str
-  - test_methods: List[str]
-  - helper_methods: List[str]
-  - imports: List[str]
-
-# Projeto Maven
-MavenProject:
-  - pom_xml: str
-  - src_structure: Dict[str, str]
-  - test_classes: List[TestClass]
-```
-
-**Uso de LLM**: ✅ Utiliza LLM para enhancement de código
-
-**Interações LLM**:
-- Melhoria de código de teste gerado por template
-- Otimização de assertions
-- Adição de validações específicas
+**LLM usage**: ✅ Uses the LLM to fill in test bodies and the 500-test logic.
 
 ### 4. CompilerCorrectorAgent
 
-**Responsabilidade**: Detecção e correção de erros de compilação
+**Responsibility**: Detection and correction of compilation errors.
 
-**Funcionalidades**:
-- Execução de compilação Maven
-- Parsing de erros de compilação
-- Correção automática de erros comuns
-- Validação de correções aplicadas
+**Functionality**:
+- Runs `mvn clean compile` through the `MavenRunner`.
+- Parses compiler diagnostics.
+- Sends the offending source plus the original scenarios back to the LLM for a
+  focused repair, up to `MAX_COMPILE_CORRECTION_ATTEMPTS` rounds.
+- Renames irrecoverable files to `.java.err` so the remaining groups proceed.
 
-**Estruturas de Entrada**:
-```python
-# Projeto Maven para compilação
-MavenProject:
-  - project_path: str
-  - pom_xml_path: str
-  - source_files: List[str]
-```
-
-**Estruturas de Saída**:
-```python
-CompilationResult:
-  - success: bool
-  - errors: List[CompilationError]
-  - corrections_applied: List[str]
-  - compilation_time: float
-
-CompilationError:
-  - file_path: str
-  - line_number: int
-  - column_number: int
-  - error_type: str  # syntax, duplicate_method, missing_import, etc.
-  - message: str
-  - suggested_fix: Optional[str]
-```
-
-**Uso de LLM**: ✅ Utiliza LLM para correção de erros complexos
-
-**Interações LLM**:
-- Análise de erros de compilação não triviais
-- Geração de correções para problemas específicos
-- Refatoração de código problemático
+**LLM usage**: ✅ Uses the LLM to repair compilation errors.
 
 ### 5. TestCorrectorAgent
 
-**Responsabilidade**: Execução de testes e correção de falhas
+**Responsibility**: Test execution and failure correction.
 
-**Funcionalidades**:
-- Execução de testes Maven
-- Parsing de resultados de teste
-- Correção de falhas de teste
-- Aplicação de @Ignore para testes persistentemente falhos
+**Functionality**:
+- Runs `mvn test` through the `MavenRunner` and parses the Surefire XML reports.
+- For each failure/error, attempts a focused LLM repair, up to
+  `MAX_TEST_CORRECTION_ATTEMPTS` rounds.
+- Uses the `TestVersionManager` to preserve a per-class version history before each
+  correction attempt.
+- Annotates persistently failing/irreconcilable tests with `@Ignore` plus a
+  structured rationale.
 
-**Estruturas de Entrada**:
-```python
-# Projeto Maven compilado
-CompiledMavenProject:
-  - project_path: str
-  - test_classes: List[str]
-  - compilation_success: bool
-```
-
-**Estruturas de Saída**:
-```python
-TestResult:
-  - success: bool
-  - total_tests: int
-  - passed_tests: int
-  - failed_tests: int
-  - errors: int
-  - failures: List[TestFailure]
-  - corrections_applied: List[str]
-
-TestFailure:
-  - test_class: str
-  - test_method: str
-  - failure_type: str  # assertion, timeout, connection, etc.
-  - message: str
-  - stack_trace: str
-  - suggested_fix: Optional[str]
-```
-
-**Uso de LLM**: ✅ Utiliza LLM para correção de falhas de teste
-
-**Interações LLM**:
-- Análise de falhas de teste complexas
-- Geração de correções para assertions
-- Otimização de timeouts e configurações
+**LLM usage**: ✅ Uses the LLM to repair test failures.
 
 ---
 
-## Fluxo de Execução
+## Execution Flow
 
-### Pipeline de 5 Fases
+### Five-Phase Pipeline (split-by-endpoint, default)
 
 ```
-Fase 1: ANÁLISE E PLANEJAMENTO
-├── PlannerAgent.analyze_api_specification()
-├── PlannerAgent.analyze_source_code() [opcional]
-├── PlannerAgent.generate_test_scenarios()
-├── PlannerAgent.validate_and_deduplicate_scenarios()
-└── PlannerAgent.export_scenarios_to_json()
+Phase 1: PLANNING
+├── Parse OpenAPI spec (OpenAPIParser)
+├── Analyse Java source / impl (JavaParser, MavenParser, JavaSourceAnalyzer) [optional]
+├── Generate positive/negative TestScenario records (+ x-parameter-examples)
+├── Deduplicate scenarios
+└── Persist snapshots: 1_raw → 2_deduplicated → 3_llm_enhanced
 
-Fase 2: GERAÇÃO DE CÓDIGO
-├── GeneratorAgent.create_maven_project()
-├── GeneratorAgent.generate_test_classes()
-├── GeneratorAgent.enhance_with_llm() [opcional]
-└── GeneratorAgent.validate_generated_code()
+(5xx scenarios are filtered out here and deferred to Phase 5)
 
-Fase 3: CORREÇÃO DE COMPILAÇÃO
-├── CompilerCorrectorAgent.compile_project()
-├── CompilerCorrectorAgent.parse_compilation_errors()
-├── CompilerCorrectorAgent.fix_compilation_errors()
-└── CompilerCorrectorAgent.verify_compilation()
+For each endpoint group (isolated unit):
+  Phase 2: GENERATION        (up to MAX_GENERATION_ATTEMPTS)
+  ├── Assemble JUnit class from templates
+  ├── Fill test bodies via LLM
+  └── Sanitize output (CodeSanitizer, HttpContentTypeFixer)
 
-Fase 4: CORREÇÃO DE TESTES
-├── TestCorrectorAgent.run_tests()
-├── TestCorrectorAgent.parse_test_failures()
-├── TestCorrectorAgent.fix_test_failures()
-└── TestCorrectorAgent.verify_test_results()
+  Phase 3: COMPILATION CORRECTION  (up to MAX_COMPILE_CORRECTION_ATTEMPTS)
+  ├── mvn clean compile (MavenRunner)
+  ├── Parse compiler diagnostics
+  ├── LLM repair (TestVersionManager preserves prior versions)
+  └── Rename to .java.err if unrecoverable
 
-Fase 5: VALIDAÇÃO FINAL
-├── IntegrationValidator.validate_project_structure()
-├── IntegrationValidator.validate_test_coverage()
-└── CoordinatorAgent.generate_final_report()
+  Phase 4: TEST CORRECTION   (up to MAX_TEST_CORRECTION_ATTEMPTS)
+  ├── mvn test (MavenRunner) + parse Surefire XML
+  ├── Fixable mismatch → LLM repair (+ IntegrationValidator)
+  └── Irreconcilable divergence → @Ignore + structured rationale
+
+Phase 5: HTTP 500 TESTING (optional, requires --api-impl)
+├── Generate *Test500.java classes (Jersey Test Framework + Mockito)
+└── Substitute Resource Pattern to trigger documented 500 responses
+
+Finalization:
+└── CoordinatorAgent aggregates per-group outcomes into GenerationResult
 ```
 
-### Sequência Detalhada de Chamadas
-
-1. **Inicialização**
-   ```python
-   coordinator = CoordinatorAgent(config, system_config)
-   await coordinator.initialize()
-   ```
-
-2. **Fase 1: Análise**
-   ```python
-   # PlannerAgent
-   api_spec = await planner.parse_api_specification(spec_path)
-   source_analysis = await planner.analyze_source_code(src_path)  # opcional
-   scenarios = await planner.generate_scenarios(api_spec, source_analysis)
-   validated_scenarios = await planner.validate_scenarios(scenarios)
-   await planner.export_scenarios(validated_scenarios)
-   ```
-
-3. **Fase 2: Geração**
-   ```python
-   # GeneratorAgent
-   maven_project = await generator.create_maven_project(context)
-   test_classes = await generator.generate_test_classes(scenarios, context)
-   enhanced_classes = await generator.enhance_with_llm(test_classes)  # opcional
-   await generator.validate_code(enhanced_classes)
-   ```
-
-4. **Fase 3: Compilação**
-   ```python
-   # CompilerCorrectorAgent
-   compilation_result = await compiler.compile_project(maven_project)
-   if not compilation_result.success:
-       errors = await compiler.parse_errors(compilation_result)
-       await compiler.fix_errors(errors)
-       compilation_result = await compiler.verify_compilation()
-   ```
-
-5. **Fase 4: Testes**
-   ```python
-   # TestCorrectorAgent
-   test_result = await test_corrector.run_tests(maven_project)
-   if test_result.failures:
-       failures = await test_corrector.parse_failures(test_result)
-       await test_corrector.fix_failures(failures)
-       test_result = await test_corrector.verify_tests()
-   ```
-
-6. **Fase 5: Validação**
-   ```python
-   # IntegrationValidator
-   validation_result = await validator.validate_project(maven_project)
-   final_report = await coordinator.generate_report(validation_result)
-   ```
+The legacy (non-split) workflow generates all classes, then compiles all, then runs
+all; it is selected when `SPLIT_BY_ENDPOINT=false`.
 
 ---
 
-## Estruturas de Dados
+## Data Structures
 
-### Modelos de Configuração
+### Configuration Models
 
 ```python
 @dataclass
 class AgentConfig:
     name: str
     model: str
-    max_tokens: int = 4000
-    temperature: float = 0.1
+    max_tokens: int = 102400
+    temperature: float = 0.7
     timeout: int = 60
+    seed: Optional[int] = None
 
 @dataclass
 class OpenRouterConfig:
@@ -438,836 +308,396 @@ class OpenRouterConfig:
     backoff_factor: float
 
 @dataclass
+class MavenConfig:
+    timeout: int
+    memory: str
+    java_home: Optional[str] = None
+    maven_home: Optional[str] = None
+
+@dataclass
+class TestGenerationConfig:
+    default_timeout: int
+    generate_negative_tests: bool
+    include_performance_tests: bool
+    max_generation_attempts: int
+    max_compile_correction_attempts: int
+    max_test_correction_attempts: int
+
+@dataclass
 class SystemConfig:
     openrouter: OpenRouterConfig
     maven: MavenConfig
     test_generation: TestGenerationConfig
+    agents: Dict[str, AgentConfig]
+    java_validation_enabled: bool
+    log_level: str
+    split_by_endpoint: bool = True
 ```
 
-### Modelos de Dados Java
-
-```python
-@dataclass
-class JavaClass:
-    name: str
-    package: str
-    file_path: str
-    annotations: List[str]
-    methods: List[JavaMethod]
-    fields: List[JavaField]
-    imports: List[str]
-    extends: Optional[str]
-    implements: List[str]
-
-@dataclass
-class JavaMethod:
-    name: str
-    return_type: str
-    parameters: List[JavaParameter]
-    annotations: List[str]
-    visibility: str
-    is_static: bool
-    is_abstract: bool
-    body: Optional[str]
-    line_number: int
-
-@dataclass
-class RestEndpoint:
-    path: str
-    method: str  # GET, POST, PUT, DELETE, PATCH
-    java_method: str
-    java_class: str
-    parameters: List[Dict[str, Any]]
-    return_type: str
-    annotations: List[str]
-    status_codes: List[int]
-    parameter_validations: Dict[str, Any]
-    description: str
-```
-
-### Modelos de Teste
+### Test and Result Models
 
 ```python
 @dataclass
 class TestScenario:
     name: str
     description: str
-    method: str
     endpoint: str
+    method: str
+    parameters: Dict[str, Any]
     expected_status: int
-    test_data: Optional[Dict[str, Any]]
-    path_parameters: Dict[str, Any]
-    query_parameters: Dict[str, Any]
-    headers: Dict[str, str]
-    expected_response_schema: Optional[Dict[str, Any]]
-    is_negative_test: bool
-    from_source_code: bool
-    tags: List[str]
-    priority: int
-    timeout: Optional[int]
+    expected_response_schema: Optional[Dict[str, Any]] = None
+    is_negative_test: bool = False
+    test_data: Optional[Dict[str, Any]] = None
+    setup_dependencies: Optional[List[Dict[str, Any]]] = None
+    teardown_dependencies: Optional[List[Dict[str, Any]]] = None
+    content_type: Optional[str] = None
 
-@dataclass
-class TestClass:
-    class_name: str
-    package_name: str
-    file_path: str
-    scenarios: List[TestScenario]
-    imports: List[str]
-    setup_methods: List[str]
-    teardown_methods: List[str]
-    helper_methods: List[str]
-```
-
-### Modelos de Resultado
-
-```python
 @dataclass
 class GenerationResult:
     success: bool
-    output_path: str
-    maven_project_path: str
-    test_files: List[str]
-    scenarios_count: int
-    compilation_success: bool
-    test_execution_success: bool
-    errors: List[str]
-    warnings: List[str]
-    execution_time: float
-    
-@dataclass
-class CompilationError:
-    file_path: str
-    line_number: int
-    column_number: int
-    error_type: str
     message: str
-    suggested_fix: Optional[str]
-    severity: str  # ERROR, WARNING, INFO
-
-@dataclass
-class TestFailure:
-    test_class: str
-    test_method: str
-    failure_type: str
-    message: str
-    stack_trace: str
-    suggested_fix: Optional[str]
-    is_intermittent: bool
+    generated_files: list[Path]
+    compilation_errors: list[str]
+    test_failures: list[str]
+    ignored_tests: list[str]
 ```
 
 ---
 
-## Uso de LLM
+## LLM Usage
 
-### Integração com OpenRouter
+### OpenRouter Integration
 
-O sistema utiliza o OpenRouter como gateway para múltiplos modelos LLM:
+ARTIST uses OpenRouter as a uniform gateway to multiple LLM providers. The
+`OpenRouterClient` forwards prompts with per-agent settings, records token usage and
+cost, and is throttled by the `RateLimiter`.
 
 ```python
 class OpenRouterClient:
-    def __init__(self, config: OpenRouterConfig):
-        self.api_key = config.api_key
-        self.api_base = config.api_base
-        self.default_model = config.default_model
-        self.rate_limiter = RateLimiter(config)
-    
-    async def generate_test_scenarios(self, api_spec: str, context: str) -> List[TestScenario]
-    async def generate_test_code(self, scenarios: List[TestScenario], context: str) -> str
-    async def fix_compilation_error(self, error: CompilationError, code: str) -> str
-    async def fix_test_failure(self, failure: TestFailure, code: str) -> str
+    def __init__(self, config: OpenRouterConfig): ...
+    def set_output_dir(self, output_dir: str) -> None: ...
+    async def chat_completion(self, messages, model, max_tokens=102400,
+                              temperature=..., seed=None, **kwargs) -> dict: ...
 ```
 
-### Modelos Suportados
+Key behaviors:
+- **Per-agent configuration**: `model`, `temperature`, `seed`, and `max_tokens` are
+  resolved per agent from `.env` (e.g. `PLANNER_MODEL`, `GENERATOR_TEMPERATURE`,
+  `PLANNER_SEED`).
+- **Cost/usage logging**: each call records `prompt_tokens`, `completion_tokens`,
+  `total_tokens`, and cost into `*_cost.json` files inside `llm_interactions/`.
+- **Seed injection**: when a seed is available it is injected into the request
+  payload for more deterministic outputs (supported by most OpenRouter models via
+  the OpenAI-compatible API).
 
-- **GPT-4o-mini**: Modelo padrão para tarefas gerais
-- **GPT-4**: Para tarefas complexas de análise
-- **Claude-3**: Alternativa para geração de código
-- **Llama-3**: Opção open-source
+### Providers
+
+Through OpenRouter, ARTIST can use providers such as Anthropic Claude, OpenAI GPT,
+Moonshot Kimi, and Google Gemini. The default model is configurable through
+`OPENROUTER_DEFAULT_MODEL` and can be overridden per agent.
 
 ### Rate Limiting
 
 ```python
 class RateLimiter:
-    def __init__(self, config: OpenRouterConfig):
-        self.requests_per_minute = config.rate_limit_requests_per_minute
-        self.tokens_per_minute = config.rate_limit_tokens_per_minute
-        self.retry_attempts = config.retry_attempts
-        self.retry_delay = config.retry_delay
-        self.backoff_factor = config.backoff_factor
-```
-
-### Prompts Especializados
-
-#### PlannerAgent - Geração de Cenários
-```python
-SCENARIO_GENERATION_PROMPT = """
-Analise a seguinte especificação de API e gere cenários de teste realistas:
-
-API Specification:
-{api_spec}
-
-Source Code Analysis:
-{source_analysis}
-
-Gere cenários que incluam:
-1. Testes de sucesso com dados válidos
-2. Testes de erro com dados inválidos
-3. Testes de edge cases
-4. Testes de validação de parâmetros
-
-Formato de saída: JSON com estrutura TestScenario
-"""
-```
-
-#### GeneratorAgent - Enhancement de Código
-```python
-CODE_ENHANCEMENT_PROMPT = """
-Melhore o seguinte código de teste Java:
-
-Template Code:
-{template_code}
-
-Project Context:
-{project_context}
-
-Melhorias desejadas:
-1. Assertions mais específicas
-2. Validações de response body
-3. Tratamento de edge cases
-4. Comentários explicativos
-
-Retorne APENAS o código Java melhorado, sem comentários adicionais.
-"""
-```
-
-#### CompilerCorrectorAgent - Correção de Erros
-```python
-COMPILATION_FIX_PROMPT = """
-Corrija o seguinte erro de compilação Java:
-
-Error:
-{error_message}
-
-Code Context:
-{code_context}
-
-File: {file_path}
-Line: {line_number}
-
-Forneça a correção mínima necessária para resolver o erro.
-Retorne APENAS o código corrigido.
-"""
-```
-
-#### TestCorrectorAgent - Correção de Falhas
-```python
-TEST_FIX_PROMPT = """
-Corrija a seguinte falha de teste:
-
-Test Failure:
-{failure_message}
-
-Test Method:
-{test_method}
-
-Stack Trace:
-{stack_trace}
-
-Analise a falha e forneça uma correção que:
-1. Resolva o problema raiz
-2. Mantenha a intenção do teste
-3. Use assertions apropriadas
-
-Retorne APENAS o método de teste corrigido.
-"""
+    # Enforces request- and token-per-minute budgets across the whole pipeline,
+    # applying retry/backoff according to OpenRouterConfig.
 ```
 
 ---
 
-## Parsers e Utilitários
+## Parsers and Utilities
 
 ### OpenAPIParser
-
-**Responsabilidade**: Análise de especificações OpenAPI/Swagger
-
-```python
-class OpenAPIParser:
-    def parse_specification(self, spec_path: str) -> OpenAPISpec
-    def extract_endpoints(self, spec: OpenAPISpec) -> List[Endpoint]
-    def extract_schemas(self, spec: OpenAPISpec) -> Dict[str, Schema]
-    def generate_test_data(self, schema: Schema) -> Dict[str, Any]
-```
-
-**Funcionalidades**:
-- Suporte para OpenAPI 3.0+ e Swagger 2.0
-- Extração de endpoints, schemas e parâmetros
-- Geração de dados de teste baseados em schemas
-- Validação de especificações
+Parses OpenAPI/Swagger documents (Swagger 2.0 and OpenAPI 3.0): extracts endpoints,
+schemas, parameters, response codes, parameter examples, and the
+`x-parameter-examples` extension.
 
 ### JavaParser
-
-**Responsabilidade**: Análise de código fonte Java
-
-```python
-class JavaParser:
-    def parse_project(self, project_path: str) -> JavaProject
-    def parse_file(self, file_path: str) -> JavaClass
-    def extract_rest_endpoints(self, classes: List[JavaClass]) -> List[RestEndpoint]
-    def extract_annotations(self, content: str) -> List[str]
-```
-
-**Funcionalidades**:
-- Parsing de classes, métodos e anotações Java
-- Extração de endpoints REST (JAX-RS)
-- Análise de anotações @Path, @GET, @POST, etc.
-- Combinação de paths de classe e método
+Parses the optional Java source tree: classes, methods, annotations, and JAX-RS REST
+endpoints (`@Path`, `@GET`, `@POST`, etc.), combining class- and method-level paths.
 
 ### MavenParser
+Parses `pom.xml`: dependencies, plugins, and project metadata relevant to the build.
 
-**Responsabilidade**: Análise de projetos Maven
-
-```python
-class MavenParser:
-    def parse_project(self, project_path: str) -> MavenProject
-    def extract_dependencies(self, pom_path: str) -> List[Dependency]
-    def extract_project_info(self, pom_path: str) -> ProjectInfo
-```
-
-**Funcionalidades**:
-- Parsing de arquivos pom.xml
-- Extração de dependências e configurações
-- Análise de estrutura de diretórios Maven
+### JavaSourceAnalyzer (`src_analyzer`)
+Discovers resource classes and endpoint mappings from source code, including
+resources annotated with `@Path` and resources inferred via the JAX-RS
+`Application` registration. Produces `EndpointMapping` records used as
+implementation-level context in `ARTIST-spec-impl` mode.
 
 ### MavenRunner
+Wraps `mvn` invocations (`clean compile`, `test`) with structured result parsing,
+producing `MavenResult` and `CompilationError` objects; handles process timeouts.
 
-**Responsabilidade**: Execução de comandos Maven
+### OpenRouterClient
+The single entry point for all LLM calls (see [LLM Usage](#llm-usage)).
 
-```python
-class MavenRunner:
-    def compile(self, project_path: str) -> CompilationResult
-    def test(self, project_path: str) -> TestResult
-    def parse_compilation_errors(self, output: str) -> List[CompilationError]
-    def parse_test_failures(self, output: str) -> List[TestFailure]
-```
+### RateLimiter
+Enforces request/token-per-minute budgets and retry/backoff policy.
 
-**Funcionalidades**:
-- Execução de comandos Maven (compile, test)
-- Parsing de saída do Maven
-- Extração de erros e falhas
-- Timeout e controle de processo
+### CodeSanitizer
+Cleans LLM output before it reaches the build (e.g. strips markdown fences and
+spurious comments) and ensures the required imports for `*Test500.java` classes.
+
+### HttpContentTypeFixer
+Post-processes generated tests to ensure correct `Content-Type` handling.
+
+### IntegrationValidator
+Runs structural checks over the generated project / repaired code before it is
+returned to the build.
+
+### TestVersionManager (`test_versioning`)
+Maintains a per-class version history, creating a versioned backup before each
+correction attempt so that no intermediate artifact is lost.
+
+### jar_utils
+Inspects the implementation JAR (lists classes/packages, locates classes by simple
+name) to support the Jersey + Mockito 500-test generation.
+
+### file_utils / logger
+Filesystem helpers (directory creation, copy, read/write, file discovery) and
+logging setup (`setup_logger`, `get_logger`, `LoggerMixin`).
 
 ---
 
-## Templates e Geração de Código
-
-### JUnitTemplate
-
-**Responsabilidade**: Geração de classes de teste JUnit 4
-
-```python
-class JUnitTemplate:
-    def generate_test_class(self, context: ProjectContext, scenarios: List[TestScenario]) -> str
-    def generate_test_method(self, scenario: TestScenario) -> str
-    def generate_helper_methods(self) -> str
-    def generate_ignored_test(self, scenario: TestScenario, reason: str) -> str
-```
-
-**Templates Jinja2**:
-```python
-# Template de classe de teste
-test_class_template = Template('''
-package {{ package_name }};
-
-import org.junit.Before;
-import org.junit.Test;
-import org.junit.After;
-import org.junit.BeforeClass;
-import org.junit.AfterClass;
-import static org.junit.Assert.*;
-import static org.hamcrest.Matchers.*;
-
-import io.restassured.RestAssured;
-import io.restassured.response.Response;
-import io.restassured.specification.RequestSpecification;
-import static io.restassured.RestAssured.*;
-import io.restassured.http.ContentType;
-
-public class {{ class_name }} {
-    
-    private static final String BASE_URL = "{{ base_url }}";
-    private static final int DEFAULT_TIMEOUT = {{ default_timeout }};
-    
-    @BeforeClass
-    public static void setUpClass() {
-        RestAssured.baseURI = BASE_URL;
-        RestAssured.enableLoggingOfRequestAndResponseIfValidationFails();
-    }
-    
-    @AfterClass
-    public static void tearDownClass() {
-        RestAssured.reset();
-    }
-    
-    @Before
-    public void setUp() {
-        // Setup before each test
-    }
-    
-    @After
-    public void tearDown() {
-        // Cleanup after each test
-    }
-    
-{% for test_method in test_methods %}
-    {{ test_method }}
-    
-{% endfor %}
-    
-    // Helper methods
-    
-    private RequestSpecification givenDefaultRequest() {
-        return given()
-            .contentType(ContentType.JSON)
-            .accept(ContentType.JSON);
-    }
-    
-    private void validateResponseTime(Response response) {
-        response.then().time(lessThan((long) DEFAULT_TIMEOUT * 1000));
-    }
-    
-    private void validateJsonResponse(Response response) {
-        response.then().contentType(ContentType.JSON);
-    }
-}
-''')
-```
+## Templates and Code Generation
 
 ### MavenProjectTemplate
+Generates the Maven project structure and the `pom.xml`. The generated project
+targets **Java 1.8** and uses, among others:
 
-**Responsabilidade**: Geração de estrutura Maven
+- JUnit `4.13.2`
+- RestAssured `4.5.1`
+- Hamcrest `2.2`
+- Jackson `2.13.4`
+- Jersey Test Framework `2.25.1` (for HTTP 500 tests)
+- Mockito `5.11.0` (for HTTP 500 tests)
+- `maven-compiler-plugin` `3.8.1`
+- `maven-surefire-plugin` `3.0.0-M7` (configured to use the JUnit 4 provider; the
+  JUnit 5 transitive dependencies pulled by Jersey are explicitly excluded)
 
-```python
-class MavenProjectTemplate:
-    def create_project(self, project_path: str, context: ProjectContext) -> MavenProject
-    def generate_pom_xml(self, context: ProjectContext) -> str
-    def create_directory_structure(self, project_path: str) -> None
-    def add_test_class(self, project_path: str, test_class: str) -> None
-```
+When `--api-impl` is provided, the implementation JAR is referenced as a
+system-scoped dependency and copied into `src/test/resources/`.
 
-**Template pom.xml**:
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 
-         http://maven.apache.org/xsd/maven-4.0.0.xsd">
-    <modelVersion>4.0.0</modelVersion>
-    
-    <groupId>{{ group_id }}</groupId>
-    <artifactId>{{ artifact_id }}</artifactId>
-    <version>{{ version }}</version>
-    <packaging>jar</packaging>
-    
-    <name>{{ project_name }}</name>
-    <description>{{ project_description }}</description>
-    
-    <properties>
-        <maven.compiler.source>11</maven.compiler.source>
-        <maven.compiler.target>11</maven.compiler.target>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <junit.version>4.13.2</junit.version>
-        <rest-assured.version>5.3.0</rest-assured.version>
-        <hamcrest.version>2.2</hamcrest.version>
-    </properties>
-    
-    <dependencies>
-        <!-- JUnit 4 -->
-        <dependency>
-            <groupId>junit</groupId>
-            <artifactId>junit</artifactId>
-            <version>${junit.version}</version>
-            <scope>test</scope>
-        </dependency>
-        
-        <!-- Rest Assured -->
-        <dependency>
-            <groupId>io.rest-assured</groupId>
-            <artifactId>rest-assured</artifactId>
-            <version>${rest-assured.version}</version>
-            <scope>test</scope>
-        </dependency>
-        
-        <!-- Hamcrest -->
-        <dependency>
-            <groupId>org.hamcrest</groupId>
-            <artifactId>hamcrest</artifactId>
-            <version>${hamcrest.version}</version>
-            <scope>test</scope>
-        </dependency>
-    </dependencies>
-    
-    <build>
-        <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.8.1</version>
-                <configuration>
-                    <source>11</source>
-                    <target>11</target>
-                </configuration>
-            </plugin>
-            
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-surefire-plugin</artifactId>
-                <version>3.0.0-M7</version>
-                <configuration>
-                    <includes>
-                        <include>**/*Test.java</include>
-                        <include>**/*Tests.java</include>
-                    </includes>
-                </configuration>
-            </plugin>
-        </plugins>
-    </build>
-</project>
-```
+### JUnitTemplate
+Generates JUnit test classes and methods, including the `@BeforeClass`/`@AfterClass`
+hooks that set `RestAssured.baseURI` and call `RestAssured.reset()`, helper methods,
+and `@Ignore`-annotated tests with a documented reason.
 
 ### RestAssuredTemplate
-
-**Responsabilidade**: Geração de código Rest Assured
-
-```python
-class RestAssuredTemplate:
-    def generate_request(self, scenario: TestScenario) -> str
-    def generate_assertions(self, scenario: TestScenario) -> str
-    def generate_path_parameters(self, parameters: Dict[str, Any]) -> str
-    def generate_query_parameters(self, parameters: Dict[str, Any]) -> str
-```
-
-**Padrões de Código**:
-```java
-// Request básico
-Response response = givenDefaultRequest()
-    .pathParam("id", "123")
-    .queryParam("format", "json")
-.when()
-    .get("/api/users/{id}")
-.then()
-    .statusCode(200)
-    .time(lessThan((long) DEFAULT_TIMEOUT * 1000))
-    .contentType(ContentType.JSON)
-    .body("id", equalTo("123"))
-    .body("name", notNullValue())
-    .extract().response();
-
-// Validações adicionais
-validateResponseTime(response);
-validateJsonResponse(response);
-```
+Generates RestAssured request/assertion snippets (`given().when().then()`) for the
+GET/POST/PUT/DELETE verbs, response validations, and authentication headers.
 
 ---
 
-## Configuração e Deployment
+## Configuration and Deployment
 
-### Arquivo de Configuração (.env)
+### Configuration File (`.env`)
 
 ```bash
-# OpenRouter Configuration
-OPENROUTER_API_KEY=your_api_key_here
+# OpenRouter API Configuration
+OPENROUTER_API_KEY=<YOUR_OPENROUTER_API_KEY>
 OPENROUTER_API_BASE=https://openrouter.ai/api/v1
-OPENROUTER_DEFAULT_MODEL=openai/gpt-4o-mini
 
 # Rate Limiting
-OPENROUTER_RATE_LIMIT_REQUESTS_PER_MINUTE=60
-OPENROUTER_RATE_LIMIT_TOKENS_PER_MINUTE=100000
-OPENROUTER_RETRY_ATTEMPTS=3
-OPENROUTER_RETRY_DELAY=1.0
-OPENROUTER_BACKOFF_FACTOR=2.0
+RATE_LIMIT_REQUESTS_PER_MINUTE=60
+RATE_LIMIT_TOKENS_PER_MINUTE=100000
+RETRY_ATTEMPTS=3
+RETRY_DELAY=2.0
+BACKOFF_FACTOR=3.0
 
-# Maven Configuration
+# Default model for all agents (can be overridden per agent)
+OPENROUTER_DEFAULT_MODEL=openai/gpt-4.1-mini
+
+# Agent-specific models
+PLANNER_MODEL=openai/gpt-4.1-mini
+GENERATOR_MODEL=openai/gpt-4.1-mini
+COMPILER_CORRECTOR_MODEL=openai/gpt-4.1-mini
+TEST_CORRECTOR_MODEL=openai/gpt-4.1-mini
+
+# Reproducibility / determinism (global and per-agent)
+# SEED=42
+# PLANNER_SEED=42
+# GENERATOR_SEED=42
+# COMPILER_CORRECTOR_SEED=42
+# TEST_CORRECTOR_SEED=42
+
+# Temperature (global and per-agent)
+TEMPERATURE=0.2
+PLANNER_TEMPERATURE=0.2
+GENERATOR_TEMPERATURE=0.2
+COMPILER_CORRECTOR_TEMPERATURE=0.2
+TEST_CORRECTOR_TEMPERATURE=0.2
+
+# System configuration
+JAVA_HOME=/local/tools/jdk1.8.0
+JAVA_VALIDATION_ENABLED=true
+MAX_GENERATION_ATTEMPTS=3
+MAX_COMPILE_CORRECTION_ATTEMPTS=3
+MAX_TEST_CORRECTION_ATTEMPTS=3
+
+# Logging
+LOG_LEVEL=INFO
+
+# Maven configuration
 MAVEN_TIMEOUT=300
 MAVEN_MEMORY=2g
-JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
-MAVEN_HOME=/usr/share/maven
+MAVEN_HOME=/local/tools/apache-maven-3.8.5
 
-# Test Generation
+# Test generation
 DEFAULT_TIMEOUT=30
 GENERATE_NEGATIVE_TESTS=true
 INCLUDE_PERFORMANCE_TESTS=false
-MAX_GENERATION_ATTEMPTS=3
-MAX_COMPILE_CORRECTION_ATTEMPTS=5
-MAX_TEST_CORRECTION_ATTEMPTS=3
+
+# Split test generation by endpoint group (one Java class per endpoint group)
+SPLIT_BY_ENDPOINT=true
 ```
 
-### Instalação e Setup
+### Installation and Setup
 
 ```bash
-# 1. Instalar dependências Python
+# 1. Install Python dependencies
 pip install -r requirements.txt
 
-# 2. Configurar variáveis de ambiente
+# 2. Configure environment variables
 cp .env.example .env
-# Editar .env com suas configurações
+# Edit .env with your configuration
 
-# 3. Verificar instalação do Maven
+# 3. Verify Maven and Java
 mvn --version
-
-# 4. Verificar instalação do Java
-java --version
-
-# 5. Executar testes do sistema
-python -m pytest tests/
+java -version
 ```
 
-### Uso via CLI
+### CLI Usage
 
 ```bash
-# Comando básico
+# Basic command (specification only)
 python main.py generate \
     --api-spec path/to/openapi.yaml \
     --output output/directory \
-    --base-url http://localhost:8080/api
+    --base-url http://localhost:8080
 
-# Com código fonte Java
+# With source code and implementation JAR (enables HTTP 500 tests)
 python main.py generate \
     --api-spec path/to/openapi.yaml \
     --api-src path/to/java/source \
+    --api-impl path/to/api-impl.jar \
     --output output/directory \
-    --base-url http://localhost:8080/api
+    --base-url http://localhost:8080
 
-# Opções avançadas
+# Advanced options
 python main.py generate \
     --api-spec path/to/openapi.yaml \
-    --api-src path/to/java/source \
     --output output/directory \
-    --base-url http://localhost:8080/api \
-    --package-name com.example.tests \
+    --package com.example.tests \
     --class-name ApiIntegrationTest \
+    --seed 42 \
     --skip-compilation \
     --skip-test-run \
     --verbose
 ```
 
----
-
-## Exemplos de Uso
-
-### Exemplo 1: API REST Countries
-
+Additional subcommands:
 ```bash
-# Geração de testes para API REST Countries
-python main.py generate \
-    --api-spec examples/restcountries.yaml \
-    --api-src examples/restcountries \
-    --output output/restcountries-tests \
-    --base-url http://localhost:8090/restcountries-2.0.5/rest
+python main.py validate --report report.txt   # check integration/configuration
+python main.py version                         # show version information
 ```
 
-**Resultado**:
-- 40 cenários de teste únicos
-- Cobertura completa de endpoints v1 e v2
-- Testes de sucesso e erro
-- Validações de response time e formato
+---
 
-### Exemplo 2: API Simples (apenas OpenAPI)
+## Usage Examples
+
+### Example 1: restcountries (specification + implementation)
 
 ```bash
-# Geração apenas com especificação OpenAPI
+python main.py generate \
+    --api-spec examples/restcountries_enhanced.json \
+    --api-src  projects/restcountries/src \
+    --api-impl projects/restcountries/target/restcountries-impl.jar \
+    --output   output/restcountries-tests \
+    --seed     3495
+```
+
+In `ARTIST-spec-impl` mode, the source code and implementation JAR provide
+implementation-level context that improves parameter synthesis and enables the
+HTTP 500 test classes.
+
+### Example 2: Specification only (`ARTIST-spec`)
+
+```bash
 python main.py generate \
     --api-spec api/petstore.yaml \
-    --output output/petstore-tests \
+    --output   output/petstore-tests \
     --base-url https://petstore.swagger.io/v2
 ```
 
-**Resultado**:
-- Cenários baseados na especificação
-- Dados de teste gerados automaticamente
-- Validações de schema
+In `ARTIST-spec` mode, only the OpenAPI document is required, making the tool
+applicable to third-party APIs or to early-stage projects whose implementation is
+still in flux.
 
-### Exemplo 3: Projeto Existente
-
-```bash
-# Análise de projeto Java existente
-python main.py generate \
-    --api-src src/main/java/com/example/api \
-    --output output/existing-project-tests \
-    --base-url http://localhost:8080/api \
-    --package-name com.example.tests
-```
-
-**Resultado**:
-- Extração de endpoints do código fonte
-- Análise de anotações JAX-RS
-- Geração de testes específicos para implementação
-
-### Estrutura de Saída
+### Output Structure
 
 ```
 output/
-├── generated-tests/
-│   └── maven-project/
-│       ├── pom.xml
-│       ├── src/
-│       │   └── test/
-│       │       └── java/
-│       │           └── com/
-│       │               └── example/
-│       │                   └── tests/
-│       │                       └── ApiIntegrationTest.java
-│       └── scenarios/
-│           ├── api-test-scenarios.json
-│           └── test-set-scenario.json
-└── logs/
-    └── generation.log
+└── generated-tests_YYYY-MM-DD_HH-MM-SS/
+    ├── maven-project/
+    │   ├── pom.xml
+    │   └── src/
+    │       └── test/
+    │           ├── java/...        # *Test.java (and *Test500.java) classes
+    │           └── resources/      # api-impl.jar (when --api-impl is provided)
+    └── llm_interactions/
+        ├── ..._scenarios_1_raw.json
+        ├── ..._scenarios_2_deduplicated.json
+        ├── ..._scenarios_3_llm_enhanced.json
+        └── ..._cost.json
 ```
 
-### Arquivo de Teste Gerado
+### Sample Generated Test
 
 ```java
-package com.example.tests;
-
-import org.junit.Before;
-import org.junit.Test;
-import org.junit.After;
-import org.junit.BeforeClass;
-import org.junit.AfterClass;
-import static org.junit.Assert.*;
-import static org.hamcrest.Matchers.*;
-
-import io.restassured.RestAssured;
-import io.restassured.response.Response;
-import io.restassured.specification.RequestSpecification;
-import static io.restassured.RestAssured.*;
-import io.restassured.http.ContentType;
-
-/**
- * Integration tests for REST Countries API
- * Generated by API Test Generator System
- * 
- * Base URL: http://localhost:8090/restcountries-2.0.5/rest
- * API Version: 2.0.5
- */
-public class ApiIntegrationTest {
-    
-    private static final String BASE_URL = "http://localhost:8090/restcountries-2.0.5/rest";
-    private static final int DEFAULT_TIMEOUT = 30;
-    
-    @BeforeClass
-    public static void setUpClass() {
-        RestAssured.baseURI = BASE_URL;
-        RestAssured.enableLoggingOfRequestAndResponseIfValidationFails();
-    }
-    
-    @AfterClass
-    public static void tearDownClass() {
-        RestAssured.reset();
-    }
-    
-    @Before
-    public void setUp() {
-        // Setup before each test
-    }
-    
-    @After
-    public void tearDown() {
-        // Cleanup after each test
-    }
-
-    /**
-     * Test successful retrieval of all countries
-     */
-    @Test
-    public void testGetAllCountriesSuccess() {
-        Response response = givenDefaultRequest()
-        .when()
-            .get("/v2/all")
-        .then()
-            .statusCode(200)
-            .time(lessThan((long) DEFAULT_TIMEOUT * 1000))
-            .contentType(ContentType.JSON)
-            .body("", not(empty()))
-            .body("size()", greaterThan(0))
-            .extract().response();
-        
-        validateResponseTime(response);
-        validateJsonResponse(response);
-    }
-
-    /**
-     * Test retrieval of country by name
-     */
-    @Test
-    public void testGetCountryByNameSuccess() {
-        Response response = givenDefaultRequest()
-            .pathParam("name", "portugal")
-        .when()
-            .get("/v2/name/{name}")
-        .then()
-            .statusCode(200)
-            .time(lessThan((long) DEFAULT_TIMEOUT * 1000))
-            .contentType(ContentType.JSON)
-            .body("", not(empty()))
-            .body("size()", greaterThan(0))
-            .extract().response();
-        
-        validateResponseTime(response);
-        validateJsonResponse(response);
-    }
-    
-    // ... mais 38 métodos de teste ...
-    
-    // Helper methods
-    
-    private RequestSpecification givenDefaultRequest() {
-        return given()
-            .contentType(ContentType.JSON)
-            .accept(ContentType.JSON);
-    }
-    
-    private void validateResponseTime(Response response) {
-        response.then().time(lessThan((long) DEFAULT_TIMEOUT * 1000));
-    }
-    
-    private void validateJsonResponse(Response response) {
-        response.then().contentType(ContentType.JSON);
-    }
+@Test
+public void testGetCountryByNamePortugal_200() {
+    RestAssured.baseURI = BASE_URL;
+    given()
+        .queryParam("fullText", false)
+    .when()
+        .get("/rest/v2/name/portugal")
+    .then()
+        .statusCode(200)
+        .body("[0].name", equalTo("Portugal"))
+        .body("[0].alpha2Code", equalTo("PT"));
 }
 ```
 
----
-
-## Conclusão
-
-O Sistema Multi-Agente para Geração de Testes de API representa uma solução robusta e automatizada para criação de testes de integração. Através da coordenação de agentes especializados, o sistema é capaz de:
-
-1. **Analisar** especificações OpenAPI e código fonte Java
-2. **Gerar** cenários de teste realistas e abrangentes
-3. **Produzir** código Java válido e compilável
-4. **Corrigir** automaticamente erros de compilação e teste
-5. **Validar** a qualidade e cobertura dos testes gerados
-
-A arquitetura modular permite extensibilidade e manutenibilidade, enquanto a integração com LLM proporciona inteligência na geração e correção de código. O sistema é adequado tanto para projetos novos quanto para análise de APIs existentes, fornecendo uma base sólida para testes automatizados.
-
-### Benefícios Principais
-
-- **Automação Completa**: Reduz significativamente o tempo de criação de testes
-- **Qualidade Garantida**: Código sempre compilável e estruturalmente válido
-- **Cobertura Abrangente**: Testes de sucesso, erro e edge cases
-- **Flexibilidade**: Suporte a diferentes tipos de API e estruturas de projeto
-- **Inteligência**: Enhancement via LLM para otimização de testes
-
-### Próximos Passos
-
-- Suporte a mais frameworks de teste (TestNG, JUnit 5)
-- Integração com ferramentas de CI/CD
-- Geração de relatórios de cobertura
-- Suporte a APIs GraphQL
-- Interface web para configuração e monitoramento
+The oracle asserts the exact HTTP status code and response-body structure documented
+in the (enriched) specification, making each test a direct executable projection of
+the contract.
 
 ---
 
-**Documentação gerada automaticamente pelo Sistema Multi-Agente para Geração de Testes de API**  
-**Versão 1.0.0 - Agosto 2025**
+## Conclusion
 
+ARTIST provides an automated, framework-independent pipeline for generating REST API
+integration tests from OpenAPI specifications. Through the coordination of
+specialized agents, the tool is able to:
+
+1. **Analyse** OpenAPI specifications and (optionally) Java source code.
+2. **Generate** specification-adherent test scenarios and JUnit/RestAssured code.
+3. **Compile** the project and repair compilation errors iteratively.
+4. **Execute** the tests and repair runtime failures, quarantining irreconcilable
+   cases with `@Ignore` while preserving traceability.
+5. **Report** the outcome through structured snapshots and a consolidated
+   `GenerationResult`.
+
+The modular architecture favours extensibility and maintainability, while the
+template-anchored, multi-agent design keeps the generated code compilable and
+specification-adherent.
+
+### Future Directions
+
+- Defect-detection assessment via mutation testing.
+- Support for authenticated APIs.
+- Support for additional testing frameworks (e.g. JUnit 5, Jest).
+- Integration with CI/CD pipelines.
