@@ -1,4 +1,4 @@
-# ARTIST — Automated REST Testing Intelligent Specification-based Tool
+# ARTIST (Automated REST Testing Intelligent Specification-based Tool)
 
 ## Complete Technical Documentation
 
@@ -166,10 +166,10 @@ GenerationResult:
 
 **Functionality**:
 - Parses OpenAPI/Swagger specifications (Swagger 2.0 and OpenAPI 3.0).
-- Optionally analyses Java source code for implementation context.
+- Optionally analyzes Java source code for implementation context.
 - Generates positive and negative `TestScenario` records from the documented
   contract.
-- Honours operation-level `x-parameter-examples` when present.
+- Honors operation-level `x-parameter-examples` when present.
 - Deduplicates scenarios.
 - Persists three auditable JSON snapshots: `1_raw`, `2_deduplicated`, and
   `3_llm_enhanced`.
@@ -245,7 +245,7 @@ TestScenario:
 ```
 Phase 1: PLANNING
 ├── Parse OpenAPI spec (OpenAPIParser)
-├── Analyse Java source / impl (JavaParser, MavenParser, JavaSourceAnalyzer) [optional]
+├── Analyze Java source / impl (JavaParser, MavenParser, JavaSourceAnalyzer) [optional]
 ├── Generate positive/negative TestScenario records (+ x-parameter-examples)
 ├── Deduplicate scenarios
 └── Persist snapshots: 1_raw → 2_deduplicated → 3_llm_enhanced
@@ -516,7 +516,7 @@ GENERATOR_MODEL=openai/gpt-4.1-mini
 COMPILER_CORRECTOR_MODEL=openai/gpt-4.1-mini
 TEST_CORRECTOR_MODEL=openai/gpt-4.1-mini
 
-# Reproducibility / determinism (global and per-agent)
+# Reproducibility/determinism (global and per-agent)
 # SEED=42
 # PLANNER_SEED=42
 # GENERATOR_SEED=42
@@ -683,7 +683,7 @@ ARTIST provides an automated, framework-independent pipeline for generating REST
 integration tests from OpenAPI specifications. Through the coordination of
 specialized agents, the tool is able to:
 
-1. **Analyse** OpenAPI specifications and (optionally) Java source code.
+1. **Analyze** OpenAPI specifications and (optionally) Java source code.
 2. **Generate** specification-adherent test scenarios and JUnit/RestAssured code.
 3. **Compile** the project and repair compilation errors iteratively.
 4. **Execute** the tests and repair runtime failures, quarantining irreconcilable
@@ -691,13 +691,6 @@ specialized agents, the tool is able to:
 5. **Report** the outcome through structured snapshots and a consolidated
    `GenerationResult`.
 
-The modular architecture favours extensibility and maintainability, while the
+The modular architecture favors extensibility and maintainability, while the
 template-anchored, multi-agent design keeps the generated code compilable and
 specification-adherent.
-
-### Future Directions
-
-- Defect-detection assessment via mutation testing.
-- Support for authenticated APIs.
-- Support for additional testing frameworks (e.g. JUnit 5, Jest).
-- Integration with CI/CD pipelines.
