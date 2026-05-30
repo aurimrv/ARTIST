@@ -1,0 +1,491 @@
+ AUTOFIXES: 25 
+
+main.py:13
+medium `typing.Optional` imported but unused
+10  10   | import asyncio
+11  11   | import sys
+12  12   | from pathlib import Path
+13       |-from typing import Optional
+14  13   | 
+15  14   | # Add src to Python path
+16  15   | sys.path.insert(0, str(Path(__file__).parent / 'src'))
+ruff:F401 
+
+
+main.py:169
+medium Local variable `version_parser` is assigned to but never used
+166 166  |     )
+167 167  |     
+168 168  |     # Version command
+169      |-    version_parser = subparsers.add_parser(
+    169  |+    subparsers.add_parser(
+170 170  |         'version',
+171 171  |         help='Show version information'
+172 172  |     )
+ruff:F841 
+
+
+main.py:296
+medium f-string without any placeholders
+293 293  |             
+294 294  |             if 'statistics' in result:
+295 295  |                 stats = result['statistics']
+296      |-                print(f"\n📊 Statistics:")
+    296  |+                print("\n📊 Statistics:")
+297 297  |                 print(f"   • Test scenarios: {stats.get('total_scenarios', 0)}")
+298 298  |                 print(f"   • Generated files: {stats.get('generated_files', 0)}")
+299 299  |                 print(f"   • Compilation fixes: {stats.get('compilation_fixes', 0)}")
+ruff:F541 
+
+
+main.py:381
+medium Local variable `logger` is assigned to but never used
+378 378  |     
+379 379  |     # Setup logging
+380 380  |     setup_logging(args.verbose, args.quiet)
+381      |-    logger = get_logger(__name__)
+    381  |+    get_logger(__name__)
+382 382  |     
+383 383  |     # Handle commands
+384 384  |     if args.command == 'generate':
+ruff:F841 
+
+
+src/agents/base_agent.py:7
+medium `pathlib.Path` imported but unused
+4   4    | 
+5   5    | from abc import ABC, abstractmethod
+6   6    | from typing import Any, Dict, Optional
+7        |-from pathlib import Path
+8   7    | 
+9   8    | from ..config.models import AgentConfig, SystemConfig
+10  9    | from ..utils.logger import LoggerMixin
+ruff:F401 
+
+
+src/agents/compiler_corrector_agent.py:7
+medium `typing.Tuple` imported but unused
+4   4    | 
+5   5    | import re
+6   6    | from pathlib import Path
+7        |-from typing import Any, Dict, List, Optional, Tuple
+    7    |+from typing import Any, Dict, List, Optional
+8   8    | 
+9   9    | from .base_agent import BaseAgent
+10  10   | from ..config.models import AgentConfig, SystemConfig
+ruff:F401 
+
+
+src/agents/coordinator_agent.py:7
+medium `asyncio` imported but unused
+4   4    | 
+5   5    | from typing import Any, Dict, List, Optional
+6   6    | from pathlib import Path
+7        |-import asyncio
+8   7    | 
+9   8    | from .base_agent import BaseAgent
+10  9    | from ..config.models import (
+ruff:F401 
+
+
+src/agents/generator_agent.py:284
+medium `re` imported but unused
+281 281  |             OrderedDict mapping class names to lists of scenarios, preserving insertion order.
+282 282  |         """
+283 283  |         from collections import OrderedDict
+284      |-        import re
+285 284  | 
+286 285  |         # Load spec endpoints for normalization
+287 286  |         spec_endpoints: List[str] = self._load_spec_endpoints(context)
+ruff:F401 
+
+
+src/agents/generator_agent.py:318
+medium `re` imported but unused
+315 315  |                 segments in same positions). Use the spec version if found.
+316 316  |         Step 2: Otherwise, replace concrete-looking segments with {param}.
+317 317  |         """
+318      |-        import re
+319 318  | 
+320 319  |         def segments(path: str) -> List[str]:
+321 320  |             return [s for s in path.split('/') if s]
+ruff:F401 
+
+
+src/agents/generator_agent.py:1187
+medium `re` imported but unused
+11841184 |           path_params, query_params, operation_id
+11851185 |         """
+11861186 |         import json
+1187     |-        import re
+11881187 |         from collections import OrderedDict
+11891188 | 
+11901189 |         result: Dict[str, List[Dict[str, Any]]] = OrderedDict()
+ruff:F401 
+
+
+src/agents/test_corrector_agent.py:347
+medium f-string without any placeholders
+344 344  |         
+345 345  |         # Fallback strategies if XML reports are not available
+346 346  |         output = maven_result.stdout + "\n" + maven_result.stderr
+347      |-        self.logger.info(f"XML reports not available, falling back to text parsing")
+    347  |+        self.logger.info("XML reports not available, falling back to text parsing")
+348 348  |         
+349 349  |         # Strategy 2: Parse [ERROR] format from Maven output
+350 350  |         failures.extend(self._parse_maven_error_format(output))
+ruff:F541 
+
+
+src/agents/test_corrector_agent.py:486
+medium Local variable `test_time` is assigned to but never used
+483 483  |                 for testcase in testsuite.findall('testcase'):
+484 484  |                     test_name = testcase.get('name', '')
+485 485  |                     test_class = testcase.get('classname', '')
+486      |-                    test_time = float(testcase.get('time', 0))
+    486  |+                    float(testcase.get('time', 0))
+487 487  | 
+488 488  |                     # When Surefire uses rerunFailingTestsCount, tests that fail
+489 489  |                     # on Run 1 but pass on Run 2 are recorded as <flakyFailure>
+ruff:F841 
+
+
+src/parsers/java_parser.py:171
+medium Local variable `lines` is assigned to but never used
+168 168  |         Returns:
+169 169  |             Parsed Java class or None
+170 170  |         """
+171      |-        lines = content.split('\n')
+    171  |+        content.split('\n')
+172 172  | 
+173 173  |         # Extract package
+174 174  |         package = self._extract_package(content)
+ruff:F841 
+
+
+src/parsers/java_parser.py:312
+medium Local variable `brace_count` is assigned to but never used
+309 309  | 
+310 310  |         # Find the complete method signature (may span multiple lines) using cleaned content
+311 311  |         method_signature = ""
+312      |-        brace_count = 0
+313 312  |         paren_count = 0
+314 313  |         found_opening_brace = False
+315 314  | 
+ruff:F841 
+
+
+src/parsers/maven_parser.py:11
+medium `..utils.file_utils.is_xml_file` imported but unused
+8   8    | from dataclasses import dataclass
+9   9    | 
+10  10   | from ..utils.logger import LoggerMixin
+11       |-from ..utils.file_utils import is_xml_file
+12  11   | 
+13  12   | 
+14  13   | @dataclass
+ruff:F401 
+
+
+src/utils/code_sanitizer.py:6
+medium `typing.List` imported but unused
+3   3    | """
+4   4    | 
+5   5    | import re
+6        |-from typing import Optional, List
+7   6    | from pathlib import Path
+8   7    | 
+9   8    | from .logger import LoggerMixin
+ruff:F401 
+
+
+src/utils/code_sanitizer.py:6
+medium `typing.Optional` imported but unused
+3   3    | """
+4   4    | 
+5   5    | import re
+6        |-from typing import Optional, List
+7   6    | from pathlib import Path
+8   7    | 
+9   8    | from .logger import LoggerMixin
+ruff:F401 
+
+
+src/utils/integration_validator.py:5
+medium `asyncio` imported but unused
+2   2    | Integration validation utility for the API Test Generator System.
+3   3    | """
+4   4    | 
+5        |-import asyncio
+6   5    | from pathlib import Path
+7   6    | from typing import Dict, List, Any, Optional
+8   7    | 
+ruff:F401 
+
+
+src/utils/integration_validator.py:7
+medium `typing.List` imported but unused
+4   4    | 
+5   5    | import asyncio
+6   6    | from pathlib import Path
+7        |-from typing import Dict, List, Any, Optional
+    7    |+from typing import Dict, Any
+8   8    | 
+9   9    | from ..config.models import SystemConfig
+10  10   | from .openrouter_client import OpenRouterClient
+ruff:F401 
+
+
+src/utils/integration_validator.py:7
+medium `typing.Optional` imported but unused
+4   4    | 
+5   5    | import asyncio
+6   6    | from pathlib import Path
+7        |-from typing import Dict, List, Any, Optional
+    7    |+from typing import Dict, Any
+8   8    | 
+9   9    | from ..config.models import SystemConfig
+10  10   | from .openrouter_client import OpenRouterClient
+ruff:F401 
+
+
+src/utils/maven_runner.py:8
+medium `typing.Tuple` imported but unused
+5   5    | import subprocess
+6   6    | import re
+7   7    | from pathlib import Path
+8        |-from typing import Dict, List, Any, Optional, Tuple
+    8    |+from typing import Dict, List, Any, Optional
+9   9    | from dataclasses import dataclass
+10  10   | 
+11  11   | from .logger import LoggerMixin
+ruff:F401 
+
+
+src/utils/openrouter_client.py:1105
+medium Local variable `endpoints_enriched_note` is assigned to but never used
+11021102 |         #   resource_class (FQN), service_class (FQN), service_method, service_method_params
+11031103 |         endpoints_enriched_note = ""
+11041104 |         if src_analysis:
+1105     |-            endpoints_enriched_note = (
+1106     |-                "\nNOTE: The endpoint descriptors below have been enriched with REAL class names "
+1107     |-                "from the source code analysis above. The 'resource_class' and 'service_class' "
+1108     |-                "fields contain fully-qualified names that MUST be used verbatim in imports.\n"
+1109     |-            )
+    1105 |+            pass
+11101106 | 
+11111107 |         # Detect classes with conflicting simple names across different packages
+11121108 |         # (e.g., CountryService in both v1 and v2) — these must be referenced by FQN
+ruff:F841 
+
+
+src/utils/openrouter_client.py:1129
+medium Local variable `conflict_warning` is assigned to but never used
+11261126 |                     conflict_lines.append(
+11271127 |                         f"  '{simple}' exists in multiple packages: {', '.join(sorted(fqns))}"
+11281128 |                     )
+1129     |-                conflict_warning = (
+    1129 |+                (
+11301130 |                     "\n=== AMBIGUOUS CLASS NAMES (REQUIRE FQN IN CODE) ===\n"
+11311131 |                     "The following class names exist in MULTIPLE packages.\n"
+11321132 |                     "For these classes:\n"
+ruff:F841 
+
+
+src/utils/rate_limiter.py:7
+medium `typing.Optional` imported but unused
+4   4    | 
+5   5    | import asyncio
+6   6    | import time
+7        |-from typing import Optional
+8   7    | from collections import deque
+9   8    | 
+10  9    | from .logger import LoggerMixin
+ruff:F401 
+
+
+src/utils/test_versioning.py:9
+medium `re` imported but unused
+6   6    | 
+7   7    | from pathlib import Path
+8   8    | from typing import Optional, List, Dict
+9        |-import re
+10  9    | import json
+11  10   | from datetime import datetime
+12  11   | 
+ruff:F401 
+
+
+
+ ISSUES: 130 
+
+.github/workflows/build.yml:9:20
+   9:20  medium  overly broad permissions                                 zizmor:zizmor/excessive-permissions
+  13:15  medium  credential persistence through GitHub Actions artifacts  zizmor:zizmor/artipacked
+  17:17  high    unpinned action reference                                zizmor:zizmor/unpinned-uses
+
+main.py:13:13
+  13:13  medium  `typing.Optional` imported but unused                                                 ruff:F401
+169:169  medium  Local variable `version_parser` is assigned to but never used                         ruff:F841
+169:169  low     Remove the unused local variable "version_parser".                                    radarlint-python:python:S1481
+221:221  high    Refactor this function to reduce its Cognitive Complexity from 23 to the 15 allowed.  radarlint-python:python:S3776
+296:296  medium  Add replacement fields or use a normal string instead of an f-string.                 radarlint-python:python:S3457
+296:296  medium  f-string without any placeholders                                                     ruff:F541
+358:359  high    Try, Except, Continue detected.                                                       bandit:B112
+365:365  medium  Remove the unused function parameter "args".                                          radarlint-python:python:S1172
+381:381  medium  Local variable `logger` is assigned to but never used                                 ruff:F841
+381:381  low     Remove the unused local variable "logger".                                            radarlint-python:python:S1481
+
+src/agents/base_agent.py:7:7
+    7:7  medium  `pathlib.Path` imported but unused  ruff:F401
+
+src/agents/compiler_corrector_agent.py:7:7
+    7:7  medium  `typing.Tuple` imported but unused                                                    ruff:F401
+154:154  high    Refactor this function to reduce its Cognitive Complexity from 19 to the 15 allowed.  radarlint-python:python:S3776
+241:241  high    Refactor this function to reduce its Cognitive Complexity from 46 to the 15 allowed.  radarlint-python:python:S3776
+523:523  medium  Remove the unused function parameter "file_path".                                     radarlint-python:python:S1172
+598:598  medium  Remove the unused function parameter "content".                                       radarlint-python:python:S1172
+
+src/agents/coordinator_agent.py:7:7
+    7:7  medium  `asyncio` imported but unused                                                         ruff:F401
+343:343  high    Refactor this function to reduce its Cognitive Complexity from 69 to the 15 allowed.  radarlint-python:python:S3776
+
+src/agents/generator_agent.py:96:96
+  96:96    medium  Remove this if statement or edit its code blocks so that they're not all the same.     radarlint-python:python:S3923
+284:284    medium  `re` imported but unused                                                               ruff:F401
+310:310    high    Refactor this function to reduce its Cognitive Complexity from 28 to the 15 allowed.   radarlint-python:python:S3776
+318:318    medium  `re` imported but unused                                                               ruff:F401
+388:388    high    Refactor this function to reduce its Cognitive Complexity from 22 to the 15 allowed.   radarlint-python:python:S3776
+614:614    high    Refactor this function to reduce its Cognitive Complexity from 284 to the 15 allowed.  radarlint-python:python:S3776
+828:828    high    Refactor this function to reduce its Cognitive Complexity from 32 to the 15 allowed.   radarlint-python:python:S3776
+947:947    high    Refactor this function to reduce its Cognitive Complexity from 19 to the 15 allowed.   radarlint-python:python:S3776
+1071:1071  high    Refactor this function to reduce its Cognitive Complexity from 75 to the 15 allowed.   radarlint-python:python:S3776
+1187:1187  medium  `re` imported but unused                                                               ruff:F401
+1299:1299  high    Define a constant instead of duplicating this literal '@Test' 4 times.                 radarlint-python:python:S1192
+1299:1299  high    Define a constant instead of duplicating this literal 'public class ' 3 times.         radarlint-python:python:S1192
+
+src/agents/planner_agent.py:331:331
+331:331    high    Refactor this function to reduce its Cognitive Complexity from 43 to the 15 allowed.     radarlint-python:python:S3776
+487:487    high    Refactor this function to reduce its Cognitive Complexity from 42 to the 15 allowed.     radarlint-python:python:S3776
+487:487    medium  Remove the unused function parameter "base_url".                                         radarlint-python:python:S1172
+700:700    medium  Remove the unused function parameter "base_url".                                         radarlint-python:python:S1172
+989:989    high    Refactor this function to reduce its Cognitive Complexity from 27 to the 15 allowed.     radarlint-python:python:S3776
+1179:1179  high    Refactor this function to reduce its Cognitive Complexity from 29 to the 15 allowed.     radarlint-python:python:S3776
+1265:1347  high    Possible SQL injection vector through string-based query construction.                   bandit:B608
+1383:1383  low     Remove this redundant Exception class; it derives from another which is already caught.  radarlint-python:python:S5713
+1391:1391  low     Remove this redundant Exception class; it derives from another which is already caught.  radarlint-python:python:S5713
+1404:1404  high    Refactor this function to reduce its Cognitive Complexity from 22 to the 15 allowed.     radarlint-python:python:S3776
+
+src/agents/test_corrector_agent.py:294:294
+294:294    high    Using xml.etree.ElementTree to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree with the equivalent defusedxml package, or make sure defusedxml.defuse_stdlib() is called.             bandit:B405
+310:310    high    Using xml.etree.ElementTree.parse to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.parse with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib() is called  bandit:B314
+347:347    medium  Add replacement fields or use a normal string instead of an f-string.                                                                                                                                                                  radarlint-python:python:S3457
+347:347    medium  f-string without any placeholders                                                                                                                                                                                                      ruff:F541
+377:377    medium  Fix this reluctant quantifier that will only ever match 1 repetition.                                                                                                                                                                  radarlint-python:python:S6019
+410:410    medium  Fix this reluctant quantifier that will only ever match 0 repetitions.                                                                                                                                                                 radarlint-python:python:S6019
+463:463    high    Refactor this function to reduce its Cognitive Complexity from 58 to the 15 allowed.                                                                                                                                                   radarlint-python:python:S3776
+465:465    high    Using xml.etree.ElementTree to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree with the equivalent defusedxml package, or make sure defusedxml.defuse_stdlib() is called.             bandit:B405
+470:470    high    Using xml.etree.ElementTree.parse to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.parse with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib() is called  bandit:B314
+486:486    medium  Local variable `test_time` is assigned to but never used                                                                                                                                                                               ruff:F841
+486:486    low     Remove the unused local variable "test_time".                                                                                                                                                                                          radarlint-python:python:S1481
+564:564    high    Refactor this function to reduce its Cognitive Complexity from 21 to the 15 allowed.                                                                                                                                                   radarlint-python:python:S3776
+1065:1065  high    Refactor this function to reduce its Cognitive Complexity from 19 to the 15 allowed.                                                                                                                                                   radarlint-python:python:S3776
+
+src/parsers/java_parser.py:19:19
+  19:19  medium  Replace the type hint "list[str]" with "Optional[list[str]]" or don't assign "None" to "annotations"   radarlint-python:python:S5890
+  64:64  medium  Replace the type hint "list[str]" with "Optional[list[str]]" or don't assign "None" to "annotations"   radarlint-python:python:S5890
+  65:65  medium  Replace the type hint "list[int]" with "Optional[list[int]]" or don't assign "None" to "status_codes"  radarlint-python:python:S5890
+171:171  medium  Local variable `lines` is assigned to but never used                                                   ruff:F841
+171:171  low     Remove the unused local variable "lines".                                                              radarlint-python:python:S1481
+222:222  medium  Simplify this regular expression to reduce its complexity from 29 to the 20 allowed.                   radarlint-python:python:S5843
+228:228  low     Replace the unused local variable "visibility" with "_".                                               radarlint-python:python:S1481
+289:289  high    Refactor this function to reduce its Cognitive Complexity from 16 to the 15 allowed.                   radarlint-python:python:S3776
+312:312  medium  Local variable `brace_count` is assigned to but never used                                             ruff:F841
+312:312  low     Remove the unused local variable "brace_count".                                                        radarlint-python:python:S1481
+355:355  medium  Simplify this regular expression to reduce its complexity from 22 to the 20 allowed.                   radarlint-python:python:S5843
+380:380  high    Refactor this function to reduce its Cognitive Complexity from 22 to the 15 allowed.                   radarlint-python:python:S3776
+443:443  medium  Simplify this regular expression to reduce its complexity from 27 to the 20 allowed.                   radarlint-python:python:S5843
+699:699  high    Refactor this function to reduce its Cognitive Complexity from 21 to the 15 allowed.                   radarlint-python:python:S3776
+
+src/parsers/maven_parser.py:5:5
+    5:5  high    Using xml.etree.ElementTree to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree with the equivalent defusedxml package, or make sure defusedxml.defuse_stdlib() is called.             bandit:B405
+  11:11  medium  `..utils.file_utils.is_xml_file` imported but unused                                                                                                                                                                                   ruff:F401
+101:101  high    Using xml.etree.ElementTree.parse to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree.parse with its defusedxml equivalent function or make sure defusedxml.defuse_stdlib() is called  bandit:B314
+111:111  high    Define a constant instead of duplicating this literal './/maven:groupId' 4 times.                                                                                                                                                      radarlint-python:python:S1192
+112:112  high    Define a constant instead of duplicating this literal './/maven:artifactId' 4 times.                                                                                                                                                   radarlint-python:python:S1192
+113:113  high    Define a constant instead of duplicating this literal './/maven:version' 4 times.                                                                                                                                                      radarlint-python:python:S1192
+
+src/parsers/openapi_parser.py:275:275
+275:275  high    Define a constant instead of duplicating this literal 'application/json' 3 times.     radarlint-python:python:S1192
+297:297  high    Refactor this function to reduce its Cognitive Complexity from 16 to the 15 allowed.  radarlint-python:python:S3776
+356:356  high    Refactor this function to reduce its Cognitive Complexity from 50 to the 15 allowed.  radarlint-python:python:S3776
+485:485  high    Refactor this function to reduce its Cognitive Complexity from 28 to the 15 allowed.  radarlint-python:python:S3776
+533:533  high    Refactor this function to reduce its Cognitive Complexity from 18 to the 15 allowed.  radarlint-python:python:S3776
+
+src/utils/code_sanitizer.py:6:6
+    6:6  medium  `typing.List` imported but unused                                                       ruff:F401
+    6:6  medium  `typing.Optional` imported but unused                                                   ruff:F401
+161:161  high    Refactor this function to reduce its Cognitive Complexity from 22 to the 15 allowed.    radarlint-python:python:S3776
+444:444  note    NOTE: Mockito and MockedStatic are intentionally NOT required for 500 tests.            ripgrep:NOTE
+470:470  medium  Ambiguous variable name: `l`                                                            ruff:E741
+485:485  high    Define a constant instead of duplicating this literal 'import ' 3 times.                radarlint-python:python:S1192
+748:748  high    Refactor this function to reduce its Cognitive Complexity from 20 to the 15 allowed.    radarlint-python:python:S3776
+800:800  high    Remove this identity check; it will always be True.                                     radarlint-python:python:S5727
+840:840  high    Define a constant instead of duplicating this literal 'RestAssured.baseURI =' 5 times.  radarlint-python:python:S1192
+840:840  high    Define a constant instead of duplicating this literal 'baseURI =' 4 times.              radarlint-python:python:S1192
+849:849  high    Refactor this function to reduce its Cognitive Complexity from 73 to the 15 allowed.    radarlint-python:python:S3776
+
+src/utils/http_content_type_fixer.py:112:112
+112:112  high    Refactor this function to reduce its Cognitive Complexity from 22 to the 15 allowed.                radarlint-python:python:S3776
+134:134  high    Define a constant instead of duplicating this literal 'multipart/form-data' 5 times.                radarlint-python:python:S1192
+135:135  high    Define a constant instead of duplicating this literal 'application/x-www-form-urlencoded' 6 times.  radarlint-python:python:S1192
+139:139  high    Define a constant instead of duplicating this literal 'application/json' 6 times.                   radarlint-python:python:S1192
+247:247  high    Refactor this function to reduce its Cognitive Complexity from 18 to the 15 allowed.                radarlint-python:python:S3776
+289:289  high    Refactor this function to reduce its Cognitive Complexity from 34 to the 15 allowed.                radarlint-python:python:S3776
+536:536  low     Remove this redundant Exception class; it derives from another which is already caught.             radarlint-python:python:S5713
+580:580  medium  Remove the unused function parameter "form_params".                                                 radarlint-python:python:S1172
+
+src/utils/integration_validator.py:5:5
+    5:5  medium  `asyncio` imported but unused                    ruff:F401
+    7:7  medium  `typing.List` imported but unused                ruff:F401
+    7:7  medium  `typing.Optional` imported but unused            ruff:F401
+273:274  high    Probable insecure usage of temp file/directory.  bandit:B108
+297:297  high    Probable insecure usage of temp file/directory.  bandit:B108
+
+src/utils/maven_runner.py:5:5
+    5:5  high    Consider possible security implications associated with the subprocess module.  bandit:B404
+    8:8  medium  `typing.Tuple` imported but unused                                              ruff:F401
+  69:74  high    Starting a process with a partial executable path                               bandit:B607
+  69:74  high    subprocess call - check for execution of untrusted input.                       bandit:B603
+197:204  high    subprocess call - check for execution of untrusted input.                       bandit:B603
+410:415  high    subprocess call - check for execution of untrusted input.                       bandit:B603
+
+src/utils/openrouter_client.py:178:178
+178:178    high    Specify an exception class to catch or reraise the exception                          radarlint-python:python:S5754
+178:178    medium  Do not use bare `except`                                                              ruff:E722
+927:927    high    Refactor this function to reduce its Cognitive Complexity from 16 to the 15 allowed.  radarlint-python:python:S3776
+1103:1103  low     Remove the unused local variable "endpoints_enriched_note".                           radarlint-python:python:S1481
+1105:1105  medium  Local variable `endpoints_enriched_note` is assigned to but never used                ruff:F841
+1113:1113  low     Remove the unused local variable "conflict_warning".                                  radarlint-python:python:S1481
+1129:1129  medium  Local variable `conflict_warning` is assigned to but never used                       ruff:F841
+
+src/utils/rate_limiter.py:7:7
+    7:7  medium  `typing.Optional` imported but unused  ruff:F401
+
+src/utils/src_analyzer.py:58:58
+  58:58  medium  Extract this nested conditional expression into an independent statement.             radarlint-python:python:S3358
+111:111  medium  Remove this commented out code.                                                       radarlint-python:python:S125
+250:250  high    Refactor this function to reduce its Cognitive Complexity from 48 to the 15 allowed.  radarlint-python:python:S3776
+317:317  high    Refactor this function to reduce its Cognitive Complexity from 22 to the 15 allowed.  radarlint-python:python:S3776
+389:389  high    Refactor this function to reduce its Cognitive Complexity from 40 to the 15 allowed.  radarlint-python:python:S3776
+490:490  high    Refactor this function to reduce its Cognitive Complexity from 18 to the 15 allowed.  radarlint-python:python:S3776
+699:700  high    Try, Except, Pass detected.                                                           bandit:B110
+
+src/utils/test_versioning.py:9:9
+    9:9  medium  `re` imported but unused     ruff:F401
+207:208  high    Try, Except, Pass detected.  bandit:B110
+298:299  high    Try, Except, Pass detected.  bandit:B110
+310:311  high    Try, Except, Pass detected.  bandit:B110
+
+✖ 130 issues
+✖ 22 security issues

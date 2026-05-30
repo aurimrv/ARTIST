@@ -1,0 +1,733 @@
+     [0/3] 🔍  Analyzing all targets... 0.01s
+     [1/3] 👀  Checking structure of 23 files...  1.81s
+     [2/3] 🤔  Looking for duplication across 23 files...  0.12s
+     [3/3] ✨  Reporting...  
+
+main.py
+    Function with many returns (count = 8): generate_command
+
+         221  async def generate_command(args: argparse.Namespace) -> int:
+         222      """Handle the generate command."""
+         223      logger = get_logger(__name__)
+         224      logger.info("Starting API test generation")
+         225      
+         226      try:
+              [hid 86 additional lines]
+
+    Function with high complexity (count = 21): generate_command
+
+         221  async def generate_command(args: argparse.Namespace) -> int:
+         222      """Handle the generate command."""
+         223      logger = get_logger(__name__)
+         224      logger.info("Starting API test generation")
+         225      
+         226      try:
+              [hid 86 additional lines]
+
+
+src/agents/compiler_corrector_agent.py
+    High total complexity (count = 117)
+
+           1  """
+           2  Compiler_Corrector Agent for fixing compilation errors.
+           3  """
+           4  
+           5  import re
+           6  from pathlib import Path
+              [hid 665 additional lines]
+
+    Function with high complexity (count = 19): validate_input
+
+         154      def validate_input(self, input_data: Dict[str, Any]) -> List[str]:
+         155          """
+         156          Validate input data for the compiler corrector agent.
+         157          
+         158          Args:
+         159              input_data: Input data to validate
+              [hid 32 additional lines]
+
+    Function with high complexity (count = 43): _fix_compilation_errors
+
+         241      async def _fix_compilation_errors(
+         242          self,
+         243          project_dir: Path,
+         244          generated_files: List[Path],
+         245          errors: List[CompilationError],
+         246          scenarios: str,
+              [hid 136 additional lines]
+
+
+src/agents/coordinator_agent.py
+    Deeply nested control flow (level = 5)
+
+         474                          if compile_result.get('success') or compile_result.get('compilation_successful'):
+         475                              compiled_ok = True
+         476                              self.logger.info(f"[Phase 3] {class_name} compiled successfully")
+         477                              break
+         478                          else:
+         479                              self.logger.warning(
+              [hid 2 additional lines]
+
+    High total complexity (count = 155)
+
+           1  """
+           2  Coordinator Agent for orchestrating the test generation process.
+           3  """
+           4  
+           5  from typing import Any, Dict, List, Optional
+           6  from pathlib import Path
+              [hid 1034 additional lines]
+
+    Function with high complexity (count = 73): _execute_split_by_endpoint
+
+         343      async def _execute_split_by_endpoint(
+         344          self,
+         345          context: ProjectContext,
+         346          scenarios: List[TestScenario],
+         347          skip_compilation: bool = False,
+         348          skip_test_run: bool = False
+              [hid 240 additional lines]
+
+    Found 19 lines of similar code in 3 locations (mass = 122)
+
+          60          try:
+          61              # Initialize Generator Agent
+          62              from .generator_agent import GeneratorAgent
+          63              
+          64              generator_config = self.system_config.agents.get('generator')
+          65              if not generator_config:
+              [hid 13 additional lines]
+        also found at src/agents/coordinator_agent.py
+        also found at src/agents/coordinator_agent.py
+
+    Found 19 lines of similar code in 3 locations (mass = 122)
+
+          80          try:
+          81              # Initialize Compiler Corrector Agent
+          82              from .compiler_corrector_agent import CompilerCorrectorAgent
+          83              
+          84              compiler_config = self.system_config.agents.get('compiler_corrector')
+          85              if not compiler_config:
+              [hid 13 additional lines]
+        also found at src/agents/coordinator_agent.py
+        also found at src/agents/coordinator_agent.py
+
+    Found 19 lines of similar code in 3 locations (mass = 122)
+
+         100          try:
+         101              # Initialize Test Corrector Agent
+         102              from .test_corrector_agent import TestCorrectorAgent
+         103              
+         104              test_config = self.system_config.agents.get('test_corrector')
+         105              if not test_config:
+              [hid 13 additional lines]
+        also found at src/agents/coordinator_agent.py
+        also found at src/agents/coordinator_agent.py
+
+
+src/agents/generator_agent.py
+    Function with many returns (count = 6): _is_valid_java_code
+
+        1319      def _is_valid_java_code(self, code: str) -> bool:
+        1320          """
+        1321          Enhanced validation of Java code structure.
+        1322          
+        1323          Args:
+        1324              code: Java code to validate
+              [hid 49 additional lines]
+
+    Deeply nested control flow (level = 5)
+
+         666                              for _method, _op in _methods.items():
+         667                                  if isinstance(_op, dict):
+         668                                      valid_endpoints.append(f"{_method.upper()} {_path}")
+
+    Deeply nested control flow (level = 5)
+
+         675                              for method, operation in methods.items():
+         676                                  if isinstance(operation, dict):
+         677                                      openapi_context += f"  {method.upper()}:\n"
+         678                                      
+         679                                      # Operation-specific consumes/produces (OpenAPI 2.0)
+         680                                      operation_consumes = operation.get('consumes', global_consumes)
+              [hid 77 additional lines]
+
+    Deeply nested control flow (level = 5)
+
+        1118                          for a, b in zip(norm_ep, norm_jaxrs):
+        1119                              if a == b:
+        1120                                  common += 1
+        1121                              else:
+        1122                                  break
+
+    Deeply nested control flow (level = 5)
+
+        1123                          if common > best_score:
+        1124                              best_score = common
+        1125                              best_resource = rc
+
+    Deeply nested control flow (level = 5)
+
+        1133                          for vtag in ['v1', 'v2', 'v3', 'v4']:
+        1134                              if vtag in rc_name_lower or vtag in rc_pkg_lower:
+        1135                                  # Check if endpoint path contains this version prefix
+        1136                                  if f'/{vtag}/' in ep_path.lower() or norm_ep.startswith(vtag + '/'):
+        1137                                      # Score: length of version tag + 1 (lower than explicit @Path match)
+        1138                                      version_score = len(vtag) + 1
+              [hid 4 additional lines]
+
+    Deeply nested control flow (level = 5)
+
+        1161                          if svc_method:
+        1162                              ep['service_method'] = svc_method.name
+        1163                              ep['service_method_params'] = svc_method.params
+        1164                              ep['service_method_return'] = svc_method.return_type
+
+    High total complexity (count = 577)
+
+           1  """
+           2  Generator Agent for creating JUnit 4 test code with Rest Assured.
+           3  """
+           4  
+           5  from pathlib import Path
+           6  from typing import Any, Dict, List, Optional
+              [hid 1491 additional lines]
+
+    Function with high complexity (count = 28): _normalize_endpoint
+
+         310      def _normalize_endpoint(self, endpoint: str, spec_endpoints: List[str]) -> str:
+         311          """
+         312          Normalize an endpoint against the OpenAPI spec.
+         313  
+         314          Step 1: Try structural match against spec endpoints (same number of fixed
+         315                  segments in same positions). Use the spec version if found.
+              [hid 45 additional lines]
+
+    Function with high complexity (count = 20): _generate_single_test_class_with_llm
+
+         388      async def _generate_single_test_class_with_llm(
+         389          self,
+         390          context: ProjectContext,
+         391          class_name: str,
+         392          scenarios: List[TestScenario],
+         393          focused: bool = False
+              [hid 100 additional lines]
+
+    Function with high complexity (count = 283): _format_openapi_context_for_llm
+
+         614      def _format_openapi_context_for_llm(self, context: ProjectContext) -> str:
+         615          """
+         616          Format OpenAPI specification context for LLM consumption.
+         617  
+         618          In addition to content-type and schema information, this method now
+         619          extracts all example values declared in the specification:
+              [hid 202 additional lines]
+
+    Function with high complexity (count = 31): _collect_param_examples
+
+         828      def _collect_param_examples(param: dict) -> list:
+         829          """
+         830          Collect all example values for a single parameter object.
+         831  
+         832          Sources (in order):
+         833          1. ``param.example``
+              [hid 47 additional lines]
+
+    Function with high complexity (count = 18): generate_test500_classes
+
+         947      async def generate_test500_classes(
+         948          self,
+         949          context: ProjectContext
+         950      ) -> List[Path]:
+         951          """
+         952          Detect all endpoints in the OpenAPI spec that document a 500 response,
+              [hid 117 additional lines]
+
+    Function with high complexity (count = 74): _enrich_endpoints_with_src
+
+        1071      def _enrich_endpoints_with_src(
+        1072          self,
+        1073          endpoints_by_class: Dict[str, List[Dict[str, Any]]],
+        1074          analyzer: Any
+        1075      ) -> Dict[str, List[Dict[str, Any]]]:
+        1076          """
+              [hid 96 additional lines]
+
+    Found 25 lines of identical code in 2 locations (mass = 200)
+
+         515          for i, scenario in enumerate(scenarios, 1):
+         516              scenarios_text += f"Scenario {i}/{total}:\n"
+         517              scenarios_text += f"- Name: {scenario.name}\n"
+         518              scenarios_text += f"- Description: {scenario.description}\n"
+         519              scenarios_text += f"- Method: {scenario.method}\n"
+         520              scenarios_text += f"- Endpoint: {scenario.endpoint}\n"
+              [hid 19 additional lines]
+        also found at src/agents/generator_agent.py
+
+    Found 25 lines of identical code in 2 locations (mass = 200)
+
+         576          for i, scenario in enumerate(scenarios, 1):
+         577              scenarios_text += f"Scenario {i}/{total}:\n"
+         578              scenarios_text += f"- Name: {scenario.name}\n"
+         579              scenarios_text += f"- Description: {scenario.description}\n"
+         580              scenarios_text += f"- Method: {scenario.method}\n"
+         581              scenarios_text += f"- Endpoint: {scenario.endpoint}\n"
+              [hid 19 additional lines]
+        also found at src/agents/generator_agent.py
+
+
+src/agents/planner_agent.py
+    Function with many returns (count = 6): _classify_status
+
+          72  def _classify_status(code: int) -> str:
+          73      """Return the broad category of an HTTP status code."""
+          74      if 100 <= code < 200:
+          75          return 'informational'
+          76      if 200 <= code < 300:
+          77          return 'success'
+              [hid 7 additional lines]
+
+    Function with many returns (count = 16): _generate_realistic_value
+
+         989      def _generate_realistic_value(self, param_name: str, param_type: str) -> Any:
+         990          """Generate realistic parameter values based on name and type."""
+         991          param_name_lower = param_name.lower()
+         992  
+         993          if param_type == 'string':
+         994              if 'name' in param_name_lower:
+              [hid 32 additional lines]
+
+    Function with many returns (count = 6): _parse_llm_response
+
+        1349      def _parse_llm_response(self, content: str) -> Optional[Dict[str, Any]]:
+        1350          """
+        1351          Parse LLM response using multiple fallback strategies to handle
+        1352          common LLM output issues such as markdown code fences, surrounding
+        1353          prose, and unescaped double-quotes inside JSON string values.
+        1354          """
+              [hid 47 additional lines]
+
+    Deeply nested control flow (level = 5)
+
+         544                          suffix = f"{status_int}_{status_label}_{idx + 1}" if len(example_list) > 1 else f"{status_int}_{status_label}"
+
+    Deeply nested control flow (level = 5)
+
+         546                          suffix = f"{status_int}_spec_example_{idx + 1}" if len(example_list) > 1 else f"{status_int}_spec_example"
+
+    Deeply nested control flow (level = 5)
+
+        1224                          (ex if len(str(ex)) <= 500 else '<truncated>')
+
+    High total complexity (count = 263)
+
+           1  """
+           2  Planner Agent for analyzing APIs and creating test scenarios.
+           3  """
+           4  
+           5  import json
+           6  import os
+              [hid 1501 additional lines]
+
+    Function with high complexity (count = 37): _extract_dependencies
+
+         331      def _extract_dependencies(self, api_spec: Any) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
+         332          """
+         333          Extract setup and teardown dependencies for each endpoint path.
+         334  
+         335          The algorithm analyses the full path hierarchy to determine which
+         336          ancestor resources must be created (via POST) before a given endpoint
+              [hid 87 additional lines]
+
+    Function with high complexity (count = 44): _generate_scenarios_from_spec
+
+         487      def _generate_scenarios_from_spec(self, api_spec: Any, base_url: str) -> List[TestScenario]:
+         488          """Generate test scenarios from OpenAPI specification."""
+         489          scenarios: List[TestScenario] = []
+         490  
+         491          for endpoint in api_spec.endpoints:
+         492              responses: Dict[str, Any] = getattr(endpoint, 'responses', {})
+              [hid 140 additional lines]
+
+    Function with high complexity (count = 27): _generate_realistic_value
+
+         989      def _generate_realistic_value(self, param_name: str, param_type: str) -> Any:
+         990          """Generate realistic parameter values based on name and type."""
+         991          param_name_lower = param_name.lower()
+         992  
+         993          if param_type == 'string':
+         994              if 'name' in param_name_lower:
+              [hid 32 additional lines]
+
+    Function with high complexity (count = 29): _prepare_llm_context
+
+        1179      def _prepare_llm_context(
+        1180          self, scenarios: List[TestScenario], api_spec: Any, base_url: str
+        1181      ) -> Dict[str, Any]:
+        1182          """Prepare context for LLM analysis."""
+        1183          api_endpoints = [
+        1184              {
+              [hid 63 additional lines]
+
+    Function with high complexity (count = 22): _fix_unescaped_quotes
+
+        1404      def _fix_unescaped_quotes(content: str) -> str:
+        1405          """
+        1406          Attempt to fix unescaped double-quotes inside JSON string values.
+        1407  
+        1408          Walks the content character-by-character, tracking whether the
+        1409          parser is currently inside a JSON string.  When a double-quote is
+              [hid 39 additional lines]
+
+    Found 20 lines of similar code in 2 locations (mass = 106)
+
+         861          if 401 in grouped_codes.get('client_error', []) and 401 not in mandatory_status_codes:
+         862              scenarios.append(
+         863                  TestScenario(
+         864                      name=(
+         865                          f"test_{endpoint.method.lower()}_"
+         866                          f"{self._sanitize_path(endpoint.path)}_unauthorized"
+              [hid 14 additional lines]
+        also found at src/agents/planner_agent.py
+
+    Found 20 lines of similar code in 2 locations (mass = 106)
+
+         883          if 403 in grouped_codes.get('client_error', []) and 403 not in mandatory_status_codes:
+         884              scenarios.append(
+         885                  TestScenario(
+         886                      name=(
+         887                          f"test_{endpoint.method.lower()}_"
+         888                          f"{self._sanitize_path(endpoint.path)}_forbidden"
+              [hid 14 additional lines]
+        also found at src/agents/planner_agent.py
+
+
+src/parsers/java_parser.py
+    High total complexity (count = 185)
+
+           1  """
+           2  Java source code parser for the API Test Generator System.
+           3  """
+           4  
+           5  import re
+           6  from pathlib import Path
+              [hid 800 additional lines]
+
+    Function with high complexity (count = 24): _parse_parameters_with_annotations
+
+         380      def _parse_parameters_with_annotations(self, params_str: str) -> List[JavaParameter]:
+         381          """Parse method parameters including JAX-RS annotations."""
+         382          if not params_str.strip():
+         383              return []
+         384  
+         385          parameters = []
+              [hid 51 additional lines]
+
+    Function with high complexity (count = 21): _extract_parameter_validations
+
+         699      def _extract_parameter_validations(self, method_body: str, parameters: List[JavaParameter]) -> Dict[str, Any]:
+         700          """Extract parameter validations from method body."""
+         701          validations = {}
+         702  
+         703          for param in parameters:
+         704              param_name = param.name
+              [hid 31 additional lines]
+
+
+src/parsers/maven_parser.py
+    High total complexity (count = 60)
+
+           1  """
+           2  Maven project parser for the API Test Generator System.
+           3  """
+           4  
+           5  import xml.etree.ElementTree as ET
+           6  from pathlib import Path
+              [hid 391 additional lines]
+
+
+src/parsers/openapi_parser.py
+    Deeply nested control flow (level = 5)
+
+         409                          if isinstance(ex_obj, dict) and 'value' in ex_obj:
+         410                              _add(ex_obj['value'])
+         411                          else:
+         412                              _add(ex_obj)
+
+    High total complexity (count = 162)
+
+           1  """
+           2  OpenAPI/Swagger specification parser for the API Test Generator System.
+           3  """
+           4  
+           5  import json
+           6  import yaml
+              [hid 619 additional lines]
+
+    Function with high complexity (count = 50): _extract_parameter_examples
+
+         356      def _extract_parameter_examples(
+         357          self, parameters: List[Dict[str, Any]]
+         358      ) -> Dict[str, List[Any]]:
+         359          """
+         360          Extract all example values for each parameter.
+         361  
+              [hid 66 additional lines]
+
+    Function with high complexity (count = 30): _extract_response_examples
+
+         485      def _extract_response_examples(
+         486          self, responses: Dict[str, Any]
+         487      ) -> Dict[str, List[Any]]:
+         488          """
+         489          Extract response body examples for each HTTP status code.
+         490  
+              [hid 41 additional lines]
+
+    Function with high complexity (count = 19): _extract_request_body_examples
+
+         533      def _extract_request_body_examples(
+         534          self, request_body: Optional[Dict[str, Any]]
+         535      ) -> List[Any]:
+         536          """
+         537          Extract request body examples.
+         538  
+              [hid 32 additional lines]
+
+
+src/utils/code_sanitizer.py
+    Deeply nested control flow (level = 5)
+
+         946                          if not ln.strip() or ln.strip() == ';':
+         947                              continue
+
+    Deeply nested control flow (level = 5)
+
+         995                          if not ln.strip() or ln.strip() == ';':
+         996                              continue
+
+    High total complexity (count = 252)
+
+           1  """
+           2  Code sanitization utilities for cleaning LLM-generated code output.
+           3  """
+           4  
+           5  import re
+           6  from typing import Optional, List
+              [hid 1007 additional lines]
+
+    Function with high complexity (count = 25): _heuristic_code_extraction
+
+         161      def _heuristic_code_extraction(self, lines: list) -> str:
+         162          """
+         163          Original heuristic-based extraction used as a last resort.
+         164  
+         165          The key fix over the original implementation is that we do NOT break
+         166          on non-Java-looking lines once we are inside the code — blank lines and
+              [hid 38 additional lines]
+
+    Function with high complexity (count = 18): _extract_method_block
+
+         643      def _extract_method_block(java_code: str, method_name: str) -> str | None:
+         644          """
+         645          Return the full text of the named public void method (including its
+         646          @Test / @Ignore annotations and closing brace) from *java_code*, or
+         647          None if the method is not found.
+         648          """
+              [hid 38 additional lines]
+
+    Function with high complexity (count = 20): enforce_restassured_lifecycle
+
+         748      def enforce_restassured_lifecycle(self, java_code: str) -> str:
+         749          """
+         750          Ensure every generated test class has the correct RestAssured lifecycle
+         751          setup, regardless of what the LLM produced.
+         752  
+         753          The following transformations are applied deterministically (no regex
+              [hid 70 additional lines]
+
+    Function with high complexity (count = 80): _fix_lifecycle_methods
+
+         849      def _fix_lifecycle_methods(self, lines: list, base_url: str) -> list:
+         850          """
+         851          Walk through the lines and patch the bodies of the three lifecycle
+         852          methods:
+         853  
+         854          * ``setupClass()``   — annotated with ``@BeforeClass``
+              [hid 158 additional lines]
+
+
+src/utils/http_content_type_fixer.py
+    Function with many returns (count = 8): _infer_content_type
+
+         112      def _infer_content_type(
+         113          self, operation: dict, global_consumes: List[str]
+         114      ) -> Tuple[Optional[str], List[str]]:
+         115          """
+         116          Return (content_type, form_param_names) for one operation.
+         117  
+              [hid 48 additional lines]
+
+    Function with many returns (count = 9): _fix_single_chain
+
+         289      def _fix_single_chain(self, chain: str) -> str:
+         290          """
+         291          Apply content-type corrections to a single given()...when().METHOD() chain.
+         292          """
+         293          # Extract HTTP method and endpoint from the chain
+         294          method, endpoint = self._extract_method_and_endpoint(chain)
+              [hid 72 additional lines]
+
+    High total complexity (count = 110)
+
+           1  """
+           2  Deterministic post-processor that corrects Content-Type usage in
+           3  RestAssured-based JUnit 4 test classes generated by an LLM.
+           4  
+           5  The fixer operates in two independent layers:
+           6  
+              [hid 590 additional lines]
+
+    Function with high complexity (count = 22): _infer_content_type
+
+         112      def _infer_content_type(
+         113          self, operation: dict, global_consumes: List[str]
+         114      ) -> Tuple[Optional[str], List[str]]:
+         115          """
+         116          Return (content_type, form_param_names) for one operation.
+         117  
+              [hid 48 additional lines]
+
+    Function with high complexity (count = 20): _extract_chain
+
+         247      def _extract_chain(self, code: str, start: int) -> Tuple[int, str]:
+         248          """
+         249          From the position of 'given()' extract the full RestAssured chain
+         250          until the closing semicolon of the outermost call.
+         251  
+         252          Returns (end_position, chain_text) or (-1, '') if extraction fails.
+              [hid 35 additional lines]
+
+    Function with high complexity (count = 27): _fix_single_chain
+
+         289      def _fix_single_chain(self, chain: str) -> str:
+         290          """
+         291          Apply content-type corrections to a single given()...when().METHOD() chain.
+         292          """
+         293          # Extract HTTP method and endpoint from the chain
+         294          method, endpoint = self._extract_method_and_endpoint(chain)
+              [hid 72 additional lines]
+
+
+src/utils/integration_validator.py
+    High total complexity (count = 56)
+
+           1  """
+           2  Integration validation utility for the API Test Generator System.
+           3  """
+           4  
+           5  import asyncio
+           6  from pathlib import Path
+              [hid 441 additional lines]
+
+
+src/utils/maven_runner.py
+    Function with many returns (count = 6): parse_compilation_errors
+
+         267      def parse_compilation_errors(self, maven_result: MavenResult) -> List[CompilationError]:
+         268          """
+         269          Parse compilation errors from Maven output.
+         270          
+         271          Args:
+         272              maven_result: Maven execution result
+              [hid 80 additional lines]
+
+
+src/utils/openrouter_client.py
+    Function with many parameters (count = 6): chat_completion
+
+          81      async def chat_completion(
+          82          self,
+          83          messages: List[Dict[str, str]],
+          84          model: str,
+          85          max_tokens: int = 102400,
+          86          temperature: float = 0.7,
+              [hid 3 additional lines]
+
+    Function with many parameters (count = 6): generate_text
+
+         182      async def generate_text(
+         183          self,
+         184          prompt: str,
+         185          model: str,
+         186          max_tokens: int = 102400,
+         187          temperature: float = 0.7,
+              [hid 3 additional lines]
+
+    Function with many parameters (count = 6): fix_test_failures
+
+         448      async def fix_test_failures(
+         449          self,
+         450          code: str,
+         451          failures: str,
+         452          scenarios: str,
+         453          model: str,
+              [hid 3 additional lines]
+
+
+src/utils/src_analyzer.py
+    Deeply nested control flow (level = 5)
+
+         290                          params_str = ', '.join(m.params) if m.params else ''
+
+    High total complexity (count = 206)
+
+           1  """
+           2  Utility for analyzing Java source code to extract JAX-RS endpoint-to-class mappings.
+           3  
+           4  This module scans a Java source tree looking for:
+           5    - Classes annotated with @Path (JAX-RS resource classes)
+           6    - Methods annotated with @GET/@POST/@PUT/@DELETE/@PATCH
+              [hid 710 additional lines]
+
+    Function with high complexity (count = 48): format_for_prompt
+
+         250      def format_for_prompt(self) -> str:
+         251          """
+         252          Format the source analysis as a concise text block for LLM prompts.
+         253          Focuses on information needed to generate correct 500Test classes.
+         254          """
+         255          if not self._classes:
+              [hid 56 additional lines]
+
+    Function with high complexity (count = 22): _collect_java_files
+
+         317      def _collect_java_files(self) -> List[str]:
+         318          """Collect all .java file paths from the source path."""
+         319          java_files = []
+         320  
+         321          if self.src_path.is_dir():
+         322              for root, _, files in os.walk(str(self.src_path)):
+              [hid 18 additional lines]
+
+    Function with high complexity (count = 44): _discover_resources_via_application
+
+         389      def _discover_resources_via_application(self, java_files: List[str]) -> None:
+         390          """
+         391          Scan Application subclasses to discover resource classes that are
+         392          registered but may not have @Path in the available source files.
+         393  
+         394          This handles the common pattern where the Application class imports
+              [hid 94 additional lines]
+
+    Function with high complexity (count = 20): _extract_http_methods
+
+         490      def _extract_http_methods(self, content: str, class_paths: List[str]) -> List[Dict]:
+         491          """
+         492          Extract HTTP method mappings from a resource class body.
+         493          Returns list of dicts with http_verb, path, method_name, params.
+         494          """
+         495          http_methods = []
+              [hid 44 additional lines]
+
+
